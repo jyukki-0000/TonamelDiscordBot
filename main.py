@@ -73,39 +73,80 @@ async def get_tournaments():
                 await browser.close()
                 return tournaments
 
-            graphql_data = graphql_responses[-1]
-            print(f"GraphQL取得成功 ({len(graphql_responses)}件中の最後を使用)")
+            try:
+                await page.wait_for_selector(
+                    "div.competitions-list ul li",
+                    timeout=10000
+                )
+            except Exception:
+                print("li セレクター待機タイムアウト（続行）")
+
+            cards = await page.evaluate("""
+                () => {
+                    const items = document.querySelectorAll(
+                        'div.competitions-list ul li'
+                    );
+                    return Array.from(items).slice(0, 10).map(li => {
+                        const a = li.querySelector('a[href]');
+                        const href = a ? a.href : '';
+
+                        const img = li.querySelector('img');
+                        const imgSrc = img ? img.src : '';
+
+                        const allText = Array.from(li.querySelectorAll('*'))
+                            .filter(el => el.children.length === 0 && el.textContent.trim())
+                            .map(el => ({
+                                tag: el.tagName,
+                                cls: el.className,
+                                text: el.textContent.trim()
+                            }));
+
+                        const timeEl = li.querySelector('time');
+                        const timeAttr = timeEl
+                            ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim())
+                            : '';
+
+                        return { href, imgSrc, timeAttr, allText };
+                    });
+                }
+            """)
+
+            print(f"DOMカード数: {len(cards)}")
+            if cards:
+                print("=== カード0 全テキスト要素 ===")
+                print(json.dumps(cards[0], ensure_ascii=False, indent=2))
+                print("==============================")
 
             edges = (
-                graphql_data
+                graphql_responses[-1]
                 .get("data", {})
                 .get("publicCompetitions", {})
                 .get("edges", [])
             )
 
-            print(f"エッジ数: {len(edges)}")
-
-            if edges:
-                print("=== 最初のノード全キー・全フィールド ===")
-                first_node = edges[0].get("node", {})
-                print(f"キー一覧: {list(first_node.keys())}")
-                print(json.dumps(first_node, ensure_ascii=False, indent=2))
-                print("=========================================")
-
-            for edge in edges[:10]:
-
+            for i, edge in enumerate(edges[:10]):
                 node = edge.get("node", {})
+                card = cards[i] if i < len(cards) else {}
 
                 comp_id = node.get("id", "")
                 title = node.get("title", "不明")
+
+                slug = node.get("slug") or node.get("competitionId") or comp_id
+                comp_url = card.get("href") or f"https://tonamel.com/competition/{slug}"
+
+                image_url = card.get("imgSrc") or None
+
+                schedule = card.get("timeAttr") or "—"
+
+                all_text = card.get("allText", [])
+                print(f"[{title}] テキスト要素数: {len(all_text)}")
+                for t in all_text:
+                    print(f"  {t['tag']} cls={t['cls']!r} -> {t['text']!r}")
 
                 entry_count = (
                     node.get("entryCount") or
                     node.get("participantCount") or
                     node.get("currentEntryCount") or
-                    node.get("entryNum") or
-                    node.get("numberOfEntrants") or
-                    node.get("maxEntryCount") or
                     "—"
                 )
 
@@ -113,63 +154,21 @@ async def get_tournaments():
                     node.get("organizerName") or
                     node.get("organizer") or
                     node.get("hostName") or
-                    node.get("host") or
-                    node.get("ownerName") or
                     node.get("owner") or
-                    node.get("creatorName") or
                     node.get("creator") or
                     "—"
                 )
-                if isinstance(organizer_raw, dict):
-                    organizer = (
-                        organizer_raw.get("name") or
-                        organizer_raw.get("displayName") or
-                        organizer_raw.get("username") or
-                        "—"
-                    )
-                else:
-                    organizer = str(organizer_raw)
+                organizer = (
+                    organizer_raw.get("name") or organizer_raw.get("displayName") or "—"
+                    if isinstance(organizer_raw, dict)
+                    else str(organizer_raw)
+                )
 
                 fmt = (
                     node.get("tournamentFormat") or
                     node.get("format") or
                     node.get("competitionFormat") or
-                    node.get("matchFormat") or
-                    node.get("ruleType") or
-                    node.get("type") or
                     "—"
-                )
-
-                image_url = (
-                    node.get("coverImageUrl") or
-                    node.get("imageUrl") or
-                    node.get("thumbnailUrl") or
-                    node.get("headerImageUrl") or
-                    node.get("coverImage") or
-                    node.get("image") or
-                    node.get("thumbnail") or
-                    node.get("bannerUrl") or
-                    node.get("banner") or
-                    node.get("logoUrl") or
-                    None
-                )
-                if isinstance(image_url, dict):
-                    image_url = image_url.get("url") or image_url.get("src") or None
-
-                slug = (
-                    node.get("slug") or
-                    node.get("competitionId") or
-                    comp_id
-                )
-                comp_url = (
-                    node.get("url") or
-                    node.get("link") or
-                    f"https://tonamel.com/competition/{slug}"
-                )
-
-                print(
-                    f"[{title}] players={entry_count}, organizer={organizer}, "
-                    f"format={fmt}, image={image_url}, url={comp_url}"
                 )
 
                 tournaments.append({
@@ -179,6 +178,7 @@ async def get_tournaments():
                     "organizer": organizer,
                     "format": str(fmt),
                     "image": image_url,
+                    "schedule": schedule,
                 })
 
             await browser.close()
@@ -237,6 +237,7 @@ async def on_ready():
                 url=t["link"],
                 color=0x5865F2
             )
+            embed.add_field(name="開催時間", value=t["schedule"], inline=False)
             embed.add_field(name="参加人数", value=t["players"], inline=True)
             embed.add_field(name="主催", value=t["organizer"], inline=True)
             embed.add_field(name="形式", value=t["format"], inline=True)
