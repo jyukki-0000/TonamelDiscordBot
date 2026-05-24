@@ -1,4 +1,5 @@
 import os
+import asyncio
 import discord
 
 from discord.ext import commands
@@ -26,7 +27,13 @@ async def get_tournaments():
 
         async with async_playwright() as p:
 
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
+            )
 
             context = await browser.new_context(
                 user_agent=(
@@ -40,7 +47,13 @@ async def get_tournaments():
 
             print("一覧ページ読み込み中...")
 
-            await page.goto(URL, wait_until="networkidle")
+            await page.goto(
+                URL,
+                wait_until="domcontentloaded",
+                timeout=60000
+            )
+
+            await page.wait_for_timeout(5000)
 
             await page.wait_for_selector(
                 "div.competitions-list ul li",
@@ -63,6 +76,7 @@ async def get_tournaments():
                         const imgSrc = img ? img.src : '';
 
                         const titleEl = li.querySelector('h3');
+
                         const title = titleEl
                             ? titleEl.textContent.trim()
                             : '不明';
@@ -74,7 +88,7 @@ async def get_tournaments():
                                 timeEl.getAttribute('datetime')
                                 || timeEl.textContent.trim()
                               )
-                            : '';
+                            : li.textContent;
 
                         return {
                             title,
@@ -86,100 +100,119 @@ async def get_tournaments():
                 }
             """)
 
-            today = datetime.now().strftime("%Y-%m-%d")
+            print(f"取得カード数: {len(cards)}")
+
+            today_md = datetime.now().strftime("%-m/%-d")
 
             for card in cards:
 
-                link = card["href"]
-
-                if not link:
-                    continue
-
-                datetime_text = card["datetimeText"]
-
-                # 当日大会のみ
-                if today not in datetime_text:
-                    continue
-
-                print(f"詳細取得: {card['title']}")
-
-                detail_page = await context.new_page()
-
                 try:
 
-                    await detail_page.goto(
-                        link,
-                        wait_until="networkidle",
-                        timeout=60000
-                    )
+                    link = card["href"]
 
-                    detail = await detail_page.evaluate("""
-                        () => {
+                    if not link:
+                        continue
 
-                            function getText(selector) {
-                                const el = document.querySelector(selector);
-                                return el
-                                    ? el.textContent.trim()
-                                    : "—";
+                    datetime_text = card["datetimeText"]
+
+                    print(f"日時確認: {datetime_text}")
+
+                    # 当日大会のみ
+                    if today_md not in datetime_text:
+                        continue
+
+                    print(f"本日の大会: {card['title']}")
+
+                    detail_page = await context.new_page()
+
+                    try:
+
+                        await detail_page.goto(
+                            link,
+                            wait_until="domcontentloaded",
+                            timeout=60000
+                        )
+
+                        await detail_page.wait_for_timeout(3000)
+
+                        detail = await detail_page.evaluate("""
+                            () => {
+
+                                function getText(selector) {
+
+                                    const el = document.querySelector(selector);
+
+                                    return el
+                                        ? el.textContent.trim()
+                                        : "—";
+                                }
+
+                                return {
+
+                                    schedule: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(2) > span"
+                                    ),
+
+                                    organizer: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.a-box.competition-card.m-competition-card.a-box--no-radius.a-box--white > div.inner > div.a-flex.organization.a-flex--flex-start.a-flex--row > a > div > span"
+                                    ),
+
+                                    maxPlayers: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(6) > span"
+                                    ),
+
+                                    format: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(4) > span"
+                                    )
+                                };
                             }
+                        """)
 
-                            return {
+                        # 現在人数取得
+                        current_players = await detail_page.evaluate("""
+                            () => {
 
-                                schedule: getText(
-                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(2) > span"
-                                ),
+                                const bodyText = document.body.innerText;
 
-                                organizer: getText(
-                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.a-box.competition-card.m-competition-card.a-box--no-radius.a-box--white > div.inner > div.a-flex.organization.a-flex--flex-start.a-flex--row > a > div > span"
-                                ),
+                                const match = bodyText.match(/(\\d+)\\s*\\/\\s*(\\d+)/);
 
-                                maxPlayers: getText(
-                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(6) > span"
-                                ),
+                                if (!match) {
+                                    return "—";
+                                }
 
-                                format: getText(
-                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(4) > span"
-                                )
-                            };
-                        }
-                    """)
+                                return match[1];
+                            }
+                        """)
 
-                    # 現在人数取得
-                    current_players = await detail_page.evaluate("""
-                        () => {
+                        max_players = detail["maxPlayers"]
 
-                            const text = document.body.innerText;
+                        tournaments.append({
+                            "title": card["title"],
+                            "link": link,
+                            "image": card["imgSrc"],
+                            "schedule": detail["schedule"],
+                            "organizer": detail["organizer"],
+                            "players": f"{current_players}/{max_players}",
+                            "format": detail["format"]
+                        })
 
-                            const match = text.match(/(\\d+)\\s*\\/\\s*(\\d+)/);
+                        print(f"取得成功: {card['title']}")
 
-                            if (!match) return "—";
+                    except Exception as e:
+                        print(f"詳細取得失敗: {e}")
 
-                            return match[1];
-                        }
-                    """)
-
-                    max_players = detail["maxPlayers"]
-
-                    tournaments.append({
-                        "title": card["title"],
-                        "link": link,
-                        "image": card["imgSrc"],
-                        "schedule": detail["schedule"],
-                        "organizer": detail["organizer"],
-                        "players": f"{current_players}/{max_players}",
-                        "format": detail["format"]
-                    })
+                    finally:
+                        await detail_page.close()
 
                 except Exception as e:
-                    print(f"詳細取得失敗: {e}")
-
-                finally:
-                    await detail_page.close()
+                    print(f"大会処理失敗: {e}")
 
             await browser.close()
 
     except Exception as e:
+
         print(f"取得エラー: {e}")
+
         import traceback
         traceback.print_exc()
 
@@ -192,10 +225,16 @@ async def purge_channel(channel):
 
     deleted = 0
 
-    async for message in channel.history(limit=None):
+    async for message in channel.history(limit=100):
+
         try:
+
             await message.delete()
+
             deleted += 1
+
+            await asyncio.sleep(1)
+
         except Exception as e:
             print(f"削除エラー: {e}")
 
@@ -215,6 +254,7 @@ async def on_ready():
         return
 
     print("既存メッセージ削除中...")
+
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
