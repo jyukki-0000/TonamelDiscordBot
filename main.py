@@ -61,9 +61,13 @@ async def get_tournaments():
 
             print("ページ読み込み中...")
 
-            await page.goto(URL, wait_until="networkidle", timeout=60000)
+            await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
 
-            await page.wait_for_timeout(3000)
+            # GraphQLデータが届くまで最大20秒ポーリング
+            for _ in range(20):
+                if graphql_responses:
+                    break
+                await page.wait_for_timeout(1000)
 
             if not graphql_responses:
                 print("GraphQLデータなし")
