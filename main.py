@@ -4,7 +4,7 @@ import asyncio
 import discord
 
 from discord.ext import commands
-from datetime import datetime
+from datetime import datetime, timedelta
 from playwright.async_api import async_playwright
 
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -31,10 +31,7 @@ async def get_tournaments():
 
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage"
-            ]
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
 
         context = await browser.new_context(
@@ -56,7 +53,7 @@ async def get_tournaments():
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
         # =========================
-        # 一覧（軽量取得）
+        # 一覧取得
         # =========================
         cards = await page.evaluate("""
         () => {
@@ -109,28 +106,23 @@ async def get_tournaments():
                 try:
 
                     await detail_page.goto(link, wait_until="domcontentloaded", timeout=120000)
-
-                    # 🔥 表示安定待機
-                    await detail_page.wait_for_selector("span.a-text--medium", timeout=15000)
+                    await detail_page.wait_for_timeout(4000)
 
                     # =========================
-                    # 詳細取得（innerText固定＝UTC回避）
+                    # 詳細取得（シンプルDOM）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
                         const get = (sel) => {
                             const el = document.querySelector(sel);
-                            return el ? el.innerText.trim() : "—";
+                            return el ? el.textContent.trim() : "—";
                         };
 
                         return {
 
-                            // 🔥 ここが最重要（表示そのまま）
-                            schedule: get("span.a-text--medium"),
-
+                            schedule_raw: get("span.a-text--medium"),
                             format: get("dl dd:nth-child(4) span"),
-
                             maxPlayers: get("dl dd:nth-child(6) span")
 
                         };
@@ -138,24 +130,40 @@ async def get_tournaments():
                     """)
 
                     # =========================
-                    # 日付抽出（変換なし）
+                    # 🔥 ここで +9時間補正
                     # =========================
-                    match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", detail["schedule"])
+                    schedule_text = detail["schedule_raw"]
+
+                    match = re.search(r"\d{4}/\d{1,2}/\d{1,2}\(.+?\)\s*(\d{1,2}):(\d{2})", schedule_text)
 
                     if not match:
-                        print("日付取得失敗:", detail["schedule"])
+                        print("日付取得失敗:", schedule_text)
                         continue
 
-                    event_date = datetime.strptime(match.group(0), "%Y/%m/%d").date()
+                    year_month_day = re.search(r"\d{4}/\d{1,2}/\d{1,2}", schedule_text).group(0)
 
-                    if event_date != today:
+                    base_date = datetime.strptime(year_month_day, "%Y/%m/%d")
+
+                    hour = int(match.group(1))
+                    minute = int(match.group(2))
+
+                    # UTC想定で +9時間補正
+                    corrected = base_date.replace(hour=hour, minute=minute) + timedelta(hours=9)
+
+                    # 表示用フォーマット
+                    display_schedule = corrected.strftime("%Y/%m/%d(日) %H:%M 〜")
+
+                    # =========================
+                    # 今日フィルタ（補正後）
+                    # =========================
+                    if corrected.date() != today:
                         continue
 
                     tournaments.append({
                         "title": card["title"],
                         "link": link,
                         "image": card["imgSrc"],
-                        "schedule": detail["schedule"],
+                        "schedule": display_schedule,
                         "players": detail["maxPlayers"],
                         "format": detail["format"]
                     })
