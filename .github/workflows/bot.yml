@@ -2,7 +2,7 @@ name: Tonamel Discord Bot
 
 on:
   schedule:
-    - cron: '0 13 * * *'  # JST 22:00
+    - cron: '20 12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -27,5 +27,4 @@ jobs:
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-        run: |
-          python main.py
+        run: python main.py
