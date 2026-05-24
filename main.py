@@ -21,7 +21,7 @@ bot = commands.Bot(
 
 
 # =========================
-# 大会取得
+# データ取得
 # =========================
 async def get_tournaments():
 
@@ -44,9 +44,6 @@ async def get_tournaments():
         await page.wait_for_timeout(7000)
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
-        # =========================
-        # 一覧取得
-        # =========================
         cards = await page.evaluate("""
         () => {
 
@@ -89,9 +86,6 @@ async def get_tournaments():
 
         today = datetime.now().date()
 
-        # =========================
-        # 詳細取得
-        # =========================
         for card in cards:
 
             try:
@@ -101,13 +95,8 @@ async def get_tournaments():
                     continue
 
                 raw_text = card["datetimeText"]
-                print("RAW:", raw_text)
 
-                # =========================
-                # 日付抽出
-                # =========================
                 match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
-
                 if not match:
                     continue
 
@@ -119,23 +108,13 @@ async def get_tournaments():
                 if event_date != today:
                     continue
 
-                print(f"本日の大会: {card['title']}")
-
                 detail_page = await context.new_page()
 
                 try:
 
-                    await detail_page.goto(
-                        link,
-                        wait_until="domcontentloaded",
-                        timeout=60000
-                    )
-
+                    await detail_page.goto(link, wait_until="domcontentloaded", timeout=60000)
                     await detail_page.wait_for_timeout(4000)
 
-                    # =========================
-                    # XPath取得（安定版）
-                    # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
@@ -151,36 +130,27 @@ async def get_tournaments():
                                 );
 
                                 const node = res.singleNodeValue;
-
-                                return node
-                                    ? node.textContent.trim()
-                                    : "—";
+                                return node ? node.textContent.trim() : "—";
 
                             } catch (e) {
                                 return "—";
                             }
                         }
 
-                        const organizerEl =
-                            document.querySelector(".organization span");
-
                         return {
 
-                            schedule: get(
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span'
-                            ),
+                            schedule: get('//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span'),
 
-                            maxPlayers: get(
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span'
-                            ),
+                            format: get('//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span'),
 
-                            format: get(
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span'
-                            ),
+                            maxPlayers: get('//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span'),
 
-                            organizer: organizerEl
-                                ? organizerEl.textContent.trim()
-                                : "—"
+                            organizer: (() => {
+                                const el = document.querySelector(
+                                    '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[1]/div[2]/div[1]/a/div/span'
+                                );
+                                return el ? el.textContent.trim() : "—";
+                            })()
                         };
                     }
                     """)
@@ -197,9 +167,6 @@ async def get_tournaments():
 
                     print(f"取得成功: {card['title']}")
 
-                except Exception as e:
-                    print(f"詳細取得失敗: {e}")
-
                 finally:
                     await detail_page.close()
 
@@ -208,32 +175,61 @@ async def get_tournaments():
 
         await browser.close()
 
-    print(f"取得大会数: {len(tournaments)}")
     return tournaments
 
 
 # =========================
-# メッセージ削除
+# 削除
 # =========================
 async def purge_channel(channel):
 
-    deleted = 0
-
-    async for message in channel.history(limit=100):
-
+    async for msg in channel.history(limit=100):
         try:
-            await message.delete()
-            deleted += 1
+            await msg.delete()
             await asyncio.sleep(1)
-
-        except Exception as e:
-            print(f"削除エラー: {e}")
-
-    print(f"削除完了: {deleted}件")
+        except:
+            pass
 
 
 # =========================
-# 起動処理
+# UI（Webカード風）
+# =========================
+def create_web_embed(t):
+
+    embed = discord.Embed(
+        title=f"🎮 {t['title']}",
+        url=t["link"],
+        color=0xee4235,
+        description=(
+            f"📅 **開催時間**: {t['schedule']}\n"
+            f"🏆 **形式**: {t['format']}\n"
+            f"👥 **参加上限**: {t['players']}\n"
+            f"🏢 **主催**: {t['organizer']}\n"
+        )
+    )
+
+    if t["image"]:
+        embed.set_thumbnail(url=t["image"])
+
+    embed.add_field(
+        name="🔗 詳細リンク",
+        value=f"[大会ページを開く]({t['link']})",
+        inline=False
+    )
+
+    embed.add_field(
+        name="🌐 コミュニティ",
+        value="[ShadowverseWB情報収集](https://discord.com/invite/gCVcg8JtR6)",
+        inline=False
+    )
+
+    embed.set_footer(text="Tonamel Tournament Viewer")
+
+    return embed
+
+
+# =========================
+# 起動
 # =========================
 @bot.event
 async def on_ready():
@@ -242,74 +238,28 @@ async def on_ready():
 
     channel = bot.get_channel(CHANNEL_ID)
 
-    if channel is None:
-        print("チャンネル取得失敗")
-        await bot.close()
+    if not channel:
         return
 
-    print("既存メッセージ削除中...")
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
 
     today_text = datetime.now().strftime("%Y/%m/%d")
 
-    # =========================
-    # 送信
-    # =========================
     if not tournaments:
 
         await channel.send(
-            f"## SVWB 大会一覧 ─ {today_text}\n"
-            f"> 本日の大会はありません。"
+            f"## 🎯 SVWB Tournament Dashboard ─ {today_text}\n"
+            "> 本日の大会はありません"
         )
+        return
 
-    else:
+    await channel.send(f"## 🎯 SVWB Tournament Dashboard ─ {today_text}")
 
-        await channel.send(
-            f"## SVWB 大会一覧 ─ {today_text}"
-        )
-
-        for t in tournaments:
-
-            embed = discord.Embed(
-                title=t["title"],
-                url=t["link"],
-                color=0xee4235
-            )
-
-            embed.add_field(
-                name="開催時間",
-                value=t["schedule"],
-                inline=False
-            )
-
-            embed.add_field(
-                name="主催",
-                value=t["organizer"],
-                inline=True
-            )
-
-            embed.add_field(
-                name="参加上限",
-                value=t["players"],
-                inline=True
-            )
-
-            embed.add_field(
-                name="大会形式",
-                value=t["format"],
-                inline=True
-            )
-
-            if t["image"]:
-                embed.set_thumbnail(url=t["image"])
-
-            embed.set_footer(
-                text="ShadowverseWB情報収集"
-            )
-
-            await channel.send(embed=embed)
+    for t in tournaments:
+        embed = create_web_embed(t)
+        await channel.send(embed=embed)
 
     print("送信完了")
     await bot.close()
