@@ -38,21 +38,43 @@ async def get_tournaments():
                 )
             )
 
-            page = await context.new_page()
+                        page = await context.new_page()
+
+            # 全GraphQLレスポンスを収集するリスト
+            graphql_responses = []
+
+            async def handle_response(response):
+                if GRAPHQL_URL in response.url:
+                    try:
+                        body = await response.json()
+                        edges = (
+                            body.get("data", {})
+                            .get("publicCompetitions", {})
+                            .get("edges", [])
+                        )
+                        print(f"GraphQL受信: edges={len(edges)}")
+                        if edges:
+                            graphql_responses.append(body)
+                    except Exception as e:
+                        print(f"GraphQL解析エラー: {e}")
+
+            page.on("response", handle_response)
 
             print("ページ読み込み中...")
 
-            # expect_response でGraphQLを確実にキャプチャ（ページ移動前に登録）
-            async with page.expect_response(
-                lambda r: GRAPHQL_URL in r.url,
-                timeout=30000
-            ) as response_info:
-                await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+            # networkidle でJS実行完了まで待つ
+            await page.goto(URL, wait_until="networkidle", timeout=60000)
 
-            graphql_response = await response_info.value
-            graphql_data = await graphql_response.json()
+            # 追加で待機（遅延APIコールに対応）
+            await page.wait_for_timeout(3000)
 
-            print("GraphQL取得成功")
+            if not graphql_responses:
+                print("GraphQLデータなし")
+                await browser.close()
+                return tournaments
+
+            graphql_data = graphql_responses[-1]
+            print(f"GraphQL取得成功 ({len(graphql_responses)}件中の最後を使用)")
 
             edges = (
                 graphql_data
