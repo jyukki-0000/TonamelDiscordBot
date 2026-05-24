@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 import discord
 
@@ -39,12 +38,11 @@ async def get_tournaments():
 
         print("一覧ページ読み込み中...")
 
-        await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(7000)
+        await page.goto(URL, wait_until="networkidle", timeout=120000)
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
         # =========================
-        # 一覧取得（時間はtextContentのみ）
+        # 一覧取得（リンクだけ）
         # =========================
         cards = await page.evaluate("""
         () => {
@@ -68,18 +66,10 @@ async def get_tournaments():
                     ? titleEl.textContent.trim()
                     : li.textContent.trim().split('\\n')[0];
 
-                // 🔥 datetime属性は完全廃止（ここが誤差原因）
-                const timeEl = li.querySelector('time');
-
-                const datetimeText = timeEl
-                    ? timeEl.textContent.trim()
-                    : li.textContent;
-
                 return {
                     title,
                     href,
-                    imgSrc,
-                    datetimeText
+                    imgSrc
                 };
             });
         }
@@ -100,81 +90,68 @@ async def get_tournaments():
                 if not link:
                     continue
 
-                raw_text = card["datetimeText"]
-
-                # 日付抽出（表示ベース）
-                match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
-                if not match:
-                    continue
-
-                try:
-                    event_date = datetime.strptime(match.group(0), "%Y/%m/%d").date()
-                except:
-                    continue
-
-                if event_date != today:
-                    continue
-
-                print(f"本日の大会: {card['title']}")
-
                 detail_page = await context.new_page()
 
                 try:
 
-                    await detail_page.goto(link, wait_until="domcontentloaded", timeout=60000)
-                    await detail_page.wait_for_timeout(5000)
+                    await detail_page.goto(link, wait_until="networkidle", timeout=120000)
 
                     # =========================
-                    # 安定XPath（表示ベースのみ）
+                    # 詳細データ取得（正しい日付span使用）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
-                        function get(xpaths) {
+                        function get(xpath) {
+                            try {
+                                const res = document.evaluate(
+                                    xpath,
+                                    document,
+                                    null,
+                                    XPathResult.FIRST_ORDERED_NODE_TYPE,
+                                    null
+                                );
 
-                            for (const xpath of xpaths) {
+                                const node = res.singleNodeValue;
+                                return node ? node.textContent.trim() : "—";
 
-                                try {
-                                    const res = document.evaluate(
-                                        xpath,
-                                        document,
-                                        null,
-                                        XPathResult.FIRST_ORDERED_NODE_TYPE,
-                                        null
-                                    );
-
-                                    const node = res.singleNodeValue;
-
-                                    if (node && node.textContent.trim()) {
-                                        return node.textContent.trim();
-                                    }
-
-                                } catch (e) {}
+                            } catch (e) {
+                                return "—";
                             }
-
-                            return "—";
                         }
 
                         return {
 
-                            // 🔥 表示テキストのみ（UTC変換一切なし）
-                            schedule: get([
-                                '//*[@id="__layout"]//dl/dd[1]//span',
-                                '//*[@id="__layout"]//dd[1]//span'
-                            ]),
+                            // 🔥 あなたが提示した正しい日付
+                            schedule: get(
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span'
+                            ),
 
-                            format: get([
-                                '//*[@id="__layout"]//dl/dd[2]//span',
-                                '//*[@id="__layout"]//dd[2]//span'
-                            ]),
+                            format: get(
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span'
+                            ),
 
-                            maxPlayers: get([
-                                '//*[@id="__layout"]//dl/dd[3]//span',
-                                '//*[@id="__layout"]//dd[3]//span'
-                            ])
+                            maxPlayers: get(
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span'
+                            )
                         };
                     }
                     """)
+
+                    # =========================
+                    # 日付判定（ここが唯一の正解）
+                    # =========================
+                    import re
+
+                    match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", detail["schedule"])
+
+                    if not match:
+                        continue
+
+                    event_date = datetime.strptime(match.group(0), "%Y/%m/%d").date()
+
+                    if event_date != today:
+                        continue
 
                     tournaments.append({
                         "title": card["title"],
