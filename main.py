@@ -1,5 +1,4 @@
 import os
-import re
 import asyncio
 import discord
 
@@ -20,201 +19,209 @@ bot = commands.Bot(
 )
 
 
-# =========================
-# 大会取得
-# =========================
 async def get_tournaments():
 
     tournaments = []
 
-    async with async_playwright() as p:
+    try:
 
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
+        async with async_playwright() as p:
 
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
             )
-        )
 
-        page = await context.new_page()
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                )
+            )
 
-        print("一覧ページ読み込み中...")
+            page = await context.new_page()
 
-        await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(5000)
-        await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
+            print("一覧ページ読み込み中...")
 
-        # =========================
-        # 一覧取得（安定版）
-        # =========================
-        cards = await page.evaluate("""
-        () => {
+            await page.goto(
+                URL,
+                wait_until="domcontentloaded",
+                timeout=60000
+            )
 
-            const items = document.querySelectorAll('div.competitions-list ul li');
+            await page.wait_for_timeout(5000)
 
-            return Array.from(items).map(li => {
+            await page.wait_for_selector(
+                "div.competitions-list ul li",
+                timeout=30000
+            )
 
-                const a = li.querySelector('a[href]');
-                const href = a ? a.href : '';
+            cards = await page.evaluate("""
+                () => {
 
-                const img = li.querySelector('img');
-                const imgSrc = img ? img.src : '';
+                    const items = document.querySelectorAll(
+                        'div.competitions-list ul li'
+                    );
 
-                const titleEl =
-                    li.querySelector('h3') ||
-                    li.querySelector('h2') ||
-                    li.querySelector('[class*="title"]');
+                    return Array.from(items).map(li => {
 
-                const title = titleEl
-                    ? titleEl.textContent.trim()
-                    : li.textContent.trim().split('\\n')[0];
+                        const a = li.querySelector('a[href]');
+                        const href = a ? a.href : '';
 
-                const timeEl = li.querySelector('time');
+                        const img = li.querySelector('img');
+                        const imgSrc = img ? img.src : '';
 
-                const datetimeText = timeEl
-                    ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim())
-                    : li.textContent;
+                        const titleEl =
+                            li.querySelector('h3') ||
+                            li.querySelector('h2') ||
+                            li.querySelector('[class*="title"]');
 
-                return {
-                    title,
-                    href,
-                    imgSrc,
-                    datetimeText
-                };
-            });
-        }
-        """)
+                        const title = titleEl
+                            ? titleEl.textContent.trim()
+                            : li.textContent.trim().split('\\n')[0];
 
-        print(f"取得カード数: {len(cards)}")
+                        const timeEl = li.querySelector('time');
 
-        today = datetime.now().strftime("%Y/%m/%d")
+                        const datetimeText = timeEl
+                            ? (
+                                timeEl.getAttribute('datetime')
+                                || timeEl.textContent.trim()
+                              )
+                            : li.textContent;
 
-        # =========================
-        # 詳細取得
-        # =========================
-        for card in cards:
+                        return {
+                            title,
+                            href,
+                            imgSrc,
+                            datetimeText
+                        };
+                    });
+                }
+            """)
 
-            try:
+            print(f"取得カード数: {len(cards)}")
 
-                link = card["href"]
-                if not link:
-                    continue
+            today_md = datetime.now().strftime("%-m/%-d")
 
-                raw_text = card["datetimeText"]
-
-                print(f"日時確認: {raw_text}")
-
-                # =========================
-                # 日付抽出（修正ポイント）
-                # =========================
-                match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
-
-                if not match:
-                    continue
-
-                event_date = match.group(0)
-
-                # 正規化
-                event_norm = "/".join(str(int(x)) for x in event_date.split("/"))
-                today_norm = "/".join(str(int(x)) for x in today.split("/"))
-
-                if event_norm != today_norm:
-                    continue
-
-                print(f"本日の大会: {card['title']}")
-
-                detail_page = await context.new_page()
+            for card in cards:
 
                 try:
 
-                    await detail_page.goto(
-                        link,
-                        wait_until="domcontentloaded",
-                        timeout=60000
-                    )
+                    link = card["href"]
 
-                    await detail_page.wait_for_timeout(3000)
+                    if not link:
+                        continue
 
-                    # =========================
-                    # 詳細取得（ラベルベース安定）
-                    # =========================
-                    detail = await detail_page.evaluate("""
-                    () => {
+                    datetime_text = card["datetimeText"]
 
-                        function findValue(label) {
+                    print(f"日時確認: {datetime_text}")
 
-                            const nodes = Array.from(
-                                document.querySelectorAll("dl, div")
-                            );
+                    # 当日大会のみ
+                    if today_md not in datetime_text:
+                        continue
 
-                            for (const n of nodes) {
+                    print(f"本日の大会: {card['title']}")
 
-                                const text = n.innerText || "";
+                    detail_page = await context.new_page()
 
-                                if (text.includes(label)) {
+                    try:
 
-                                    const lines = text.split("\\n");
+                        await detail_page.goto(
+                            link,
+                            wait_until="domcontentloaded",
+                            timeout=60000
+                        )
 
-                                    for (let i = 0; i < lines.length; i++) {
+                        await detail_page.wait_for_timeout(3000)
 
-                                        if (lines[i].includes(label)) {
-                                            return lines[i + 1] || "—";
-                                        }
-                                    }
-                                }
-                            }
+                        detail = await detail_page.evaluate("""
+() => {
 
-                            return "—";
-                        }
+    function findValue(labelText) {
 
-                        const org = document.querySelector(".organization span");
+        const items = document.querySelectorAll("dl, div");
 
-                        return {
+        for (const el of items) {
 
-                            schedule: findValue("開催時間"),
-                            format: findValue("大会形式"),
-                            maxPlayers: findValue("参加上限"),
-                            organizer: org ? org.textContent.trim() : "—"
-                        };
+            const text = el.innerText || "";
+
+            if (text.includes(labelText)) {
+
+                const parts = text.split("\\n");
+
+                for (let i = 0; i < parts.length; i++) {
+
+                    if (parts[i].includes(labelText)) {
+                        return parts[i + 1] || "—";
                     }
-                    """)
+                }
+            }
+        }
 
-                    tournaments.append({
-                        "title": card["title"],
-                        "link": link,
-                        "image": card["imgSrc"],
-                        "schedule": detail["schedule"],
-                        "organizer": detail["organizer"],
-                        "players": detail["maxPlayers"],
-                        "format": detail["format"]
-                    })
+        return "—";
+    }
 
-                    print(f"取得成功: {card['title']}")
+    function getOrganizer() {
+
+        const el = document.querySelector(
+            ".organization span"
+        );
+
+        return el ? el.textContent.trim() : "—";
+    }
+
+    return {
+
+        schedule: findValue("開催時間"),
+
+        format: findValue("大会形式"),
+
+        maxPlayers: findValue("参加上限"),
+
+        organizer: getOrganizer()
+    };
+}
+""")
+
+                        tournaments.append({
+                            "title": card["title"],
+                            "link": link,
+                            "image": card["imgSrc"],
+                            "schedule": detail["schedule"],
+                            "organizer": detail["organizer"],
+                            "players": detail["maxPlayers"],
+                            "format": detail["format"]
+                        })
+
+                        print(f"取得成功: {card['title']}")
+
+                    except Exception as e:
+                        print(f"詳細取得失敗: {e}")
+
+                    finally:
+                        await detail_page.close()
 
                 except Exception as e:
-                    print(f"詳細取得失敗: {e}")
+                    print(f"大会処理失敗: {e}")
 
-                finally:
-                    await detail_page.close()
+            await browser.close()
 
-            except Exception as e:
-                print(f"大会処理失敗: {e}")
+    except Exception as e:
 
-        await browser.close()
+        print(f"取得エラー: {e}")
+
+        import traceback
+        traceback.print_exc()
 
     print(f"取得大会数: {len(tournaments)}")
+
     return tournaments
 
 
-# =========================
-# メッセージ削除
-# =========================
 async def purge_channel(channel):
 
     deleted = 0
@@ -222,8 +229,11 @@ async def purge_channel(channel):
     async for message in channel.history(limit=100):
 
         try:
+
             await message.delete()
+
             deleted += 1
+
             await asyncio.sleep(1)
 
         except Exception as e:
@@ -232,9 +242,6 @@ async def purge_channel(channel):
     print(f"削除完了: {deleted}件")
 
 
-# =========================
-# 起動処理
-# =========================
 @bot.event
 async def on_ready():
 
@@ -248,15 +255,13 @@ async def on_ready():
         return
 
     print("既存メッセージ削除中...")
+
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
 
     today_text = datetime.now().strftime("%Y/%m/%d")
 
-    # =========================
-    # 送信処理
-    # =========================
     if not tournaments:
 
         await channel.send(
@@ -312,6 +317,7 @@ async def on_ready():
             await channel.send(embed=embed)
 
     print("送信完了")
+
     await bot.close()
 
 
