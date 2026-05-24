@@ -2,9 +2,7 @@ name: Tonamel Notify
 
 on:
   schedule:
-    # 日本時間 朝6時
     - cron: '0 21 * * *'
-
   workflow_dispatch:
 
 jobs:
@@ -21,10 +19,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install Packages
-        run: pip install -r requirements.txt
+        run: pip install discord.py playwright
+
+      - name: Install Playwright Browsers
+        run: python -m playwright install chromium --with-deps
 
       - name: Run Bot
-        run: python main.py
+        run: python bot/main.py
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
