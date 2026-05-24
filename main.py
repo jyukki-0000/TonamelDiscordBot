@@ -133,7 +133,7 @@ async def get_tournaments():
                 comp_url = (
                     node.get("url") or
                     node.get("link") or
-                    f"https://tonamel.com/competitions/{slug}"
+                    f"https://tonamel.com/competition/{slug}"
                 )
 
                 tournaments.append({
@@ -186,45 +186,25 @@ async def on_ready():
 
     today_text = datetime.now().strftime("%Y/%m/%d")
 
-    header = (
-        f"## SVWB 大会一覧 ─ {today_text}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    )
-    await channel.send(header)
-
     if not tournaments:
-        await channel.send("> 現在取得できる大会情報はありません。")
+        await channel.send(
+            f"## SVWB 大会一覧 ─ {today_text}\n"
+            f"> 現在取得できる大会情報はありません。"
+        )
     else:
-        lines = []
-        for t in tournaments:
-            lines.append(f"- **[{t['title']}]({t['link']})**")
-            lines.append(
-                f"  参加人数 `{t['players']}` ／ "
-                f"主催 `{t['organizer']}` ／ "
-                f"形式 `{t['format']}`"
-            )
+        lines = [f"SVWB 大会一覧 ─ {today_text}", ""]
+        for i, t in enumerate(tournaments, 1):
+            lines.append(f"{i}. {t['title']}")
+            lines.append(f"   参加人数: {t['players']}  主催: {t['organizer']}  形式: {t['format']}")
+            lines.append(f"   {t['link']}")
             lines.append("")
 
-        list_message = "\n".join(lines)
+        code_block = "```\n" + "\n".join(lines).rstrip() + "\n```"
 
-        if len(list_message) > 1900:
-            list_message = list_message[:1900] + "\n..."
+        if len(code_block) > 1900:
+            code_block = code_block[:1897] + "\n```"
 
-        await channel.send(list_message)
-
-        for t in tournaments:
-            embed = discord.Embed(
-                title=t["title"],
-                url=t["link"],
-                color=0x5865F2
-            )
-            embed.add_field(name="参加人数", value=t["players"], inline=True)
-            embed.add_field(name="主催", value=t["organizer"], inline=True)
-            embed.add_field(name="トーナメント形式", value=t["format"], inline=False)
-            embed.set_footer(text="Tonamel Tournament")
-            await channel.send(embed=embed)
-
-    await channel.send("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        await channel.send(code_block)
 
     print("送信完了")
     await bot.close()
