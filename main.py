@@ -63,7 +63,6 @@ async def get_tournaments():
 
             await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
 
-            # GraphQLデータが届くまで最大20秒ポーリング
             for _ in range(20):
                 if graphql_responses:
                     break
@@ -87,9 +86,11 @@ async def get_tournaments():
             print(f"エッジ数: {len(edges)}")
 
             if edges:
-                print("=== 最初のノード全フィールド ===")
-                print(json.dumps(edges[0].get("node", {}), ensure_ascii=False, indent=2))
-                print("=================================")
+                print("=== 最初のノード全キー・全フィールド ===")
+                first_node = edges[0].get("node", {})
+                print(f"キー一覧: {list(first_node.keys())}")
+                print(json.dumps(first_node, ensure_ascii=False, indent=2))
+                print("=========================================")
 
             for edge in edges[:10]:
 
@@ -103,6 +104,8 @@ async def get_tournaments():
                     node.get("participantCount") or
                     node.get("currentEntryCount") or
                     node.get("entryNum") or
+                    node.get("numberOfEntrants") or
+                    node.get("maxEntryCount") or
                     "—"
                 )
 
@@ -111,10 +114,19 @@ async def get_tournaments():
                     node.get("organizer") or
                     node.get("hostName") or
                     node.get("host") or
+                    node.get("ownerName") or
+                    node.get("owner") or
+                    node.get("creatorName") or
+                    node.get("creator") or
                     "—"
                 )
                 if isinstance(organizer_raw, dict):
-                    organizer = organizer_raw.get("name", "—")
+                    organizer = (
+                        organizer_raw.get("name") or
+                        organizer_raw.get("displayName") or
+                        organizer_raw.get("username") or
+                        "—"
+                    )
                 else:
                     organizer = str(organizer_raw)
 
@@ -122,8 +134,27 @@ async def get_tournaments():
                     node.get("tournamentFormat") or
                     node.get("format") or
                     node.get("competitionFormat") or
+                    node.get("matchFormat") or
+                    node.get("ruleType") or
+                    node.get("type") or
                     "—"
                 )
+
+                image_url = (
+                    node.get("coverImageUrl") or
+                    node.get("imageUrl") or
+                    node.get("thumbnailUrl") or
+                    node.get("headerImageUrl") or
+                    node.get("coverImage") or
+                    node.get("image") or
+                    node.get("thumbnail") or
+                    node.get("bannerUrl") or
+                    node.get("banner") or
+                    node.get("logoUrl") or
+                    None
+                )
+                if isinstance(image_url, dict):
+                    image_url = image_url.get("url") or image_url.get("src") or None
 
                 slug = (
                     node.get("slug") or
@@ -136,12 +167,18 @@ async def get_tournaments():
                     f"https://tonamel.com/competition/{slug}"
                 )
 
+                print(
+                    f"[{title}] players={entry_count}, organizer={organizer}, "
+                    f"format={fmt}, image={image_url}, url={comp_url}"
+                )
+
                 tournaments.append({
                     "title": title,
                     "link": comp_url,
                     "players": str(entry_count),
                     "organizer": organizer,
-                    "format": str(fmt)
+                    "format": str(fmt),
+                    "image": image_url,
                 })
 
             await browser.close()
@@ -192,19 +229,21 @@ async def on_ready():
             f"> 現在取得できる大会情報はありません。"
         )
     else:
-        lines = [f"SVWB 大会一覧 ─ {today_text}", ""]
-        for i, t in enumerate(tournaments, 1):
-            lines.append(f"{i}. {t['title']}")
-            lines.append(f"   参加人数: {t['players']}  主催: {t['organizer']}  形式: {t['format']}")
-            lines.append(f"   {t['link']}")
-            lines.append("")
+        await channel.send(f"## SVWB 大会一覧 ─ {today_text}")
 
-        code_block = "```\n" + "\n".join(lines).rstrip() + "\n```"
-
-        if len(code_block) > 1900:
-            code_block = code_block[:1897] + "\n```"
-
-        await channel.send(code_block)
+        for t in tournaments:
+            embed = discord.Embed(
+                title=t["title"],
+                url=t["link"],
+                color=0x5865F2
+            )
+            embed.add_field(name="参加人数", value=t["players"], inline=True)
+            embed.add_field(name="主催", value=t["organizer"], inline=True)
+            embed.add_field(name="形式", value=t["format"], inline=True)
+            if t["image"]:
+                embed.set_image(url=t["image"])
+            embed.set_footer(text="Tonamel")
+            await channel.send(embed=embed)
 
     print("送信完了")
     await bot.close()
