@@ -75,11 +75,14 @@ async def get_tournaments():
                         const img = li.querySelector('img');
                         const imgSrc = img ? img.src : '';
 
-                        const titleEl = li.querySelector('h3');
+                        const titleEl =
+                            li.querySelector('h3') ||
+                            li.querySelector('h2') ||
+                            li.querySelector('[class*="title"]');
 
                         const title = titleEl
                             ? titleEl.textContent.trim()
-                            : '不明';
+                            : li.textContent.trim().split('\\n')[0];
 
                         const timeEl = li.querySelector('time');
 
@@ -168,31 +171,13 @@ async def get_tournaments():
                             }
                         """)
 
-                        # 現在人数取得
-                        current_players = await detail_page.evaluate("""
-                            () => {
-
-                                const bodyText = document.body.innerText;
-
-                                const match = bodyText.match(/(\\d+)\\s*\\/\\s*(\\d+)/);
-
-                                if (!match) {
-                                    return "—";
-                                }
-
-                                return match[1];
-                            }
-                        """)
-
-                        max_players = detail["maxPlayers"]
-
                         tournaments.append({
                             "title": card["title"],
                             "link": link,
                             "image": card["imgSrc"],
                             "schedule": detail["schedule"],
                             "organizer": detail["organizer"],
-                            "players": f"{current_players}/{max_players}",
+                            "players": detail["maxPlayers"],
                             "format": detail["format"]
                         })
 
@@ -279,7 +264,7 @@ async def on_ready():
             embed = discord.Embed(
                 title=t["title"],
                 url=t["link"],
-                color=0x5865F2
+                color=0xee4235
             )
 
             embed.add_field(
@@ -295,7 +280,7 @@ async def on_ready():
             )
 
             embed.add_field(
-                name="参加人数",
+                name="参加上限",
                 value=t["players"],
                 inline=True
             )
@@ -307,9 +292,11 @@ async def on_ready():
             )
 
             if t["image"]:
-                embed.set_image(url=t["image"])
+                embed.set_thumbnail(url=t["image"])
 
-            embed.set_footer(text="Tonamel")
+            embed.set_footer(
+                text="ShadowverseWB情報収集"
+            )
 
             await channel.send(embed=embed)
 
