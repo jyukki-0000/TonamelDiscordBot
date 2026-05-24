@@ -38,9 +38,8 @@ async def get_tournaments():
                 )
             )
 
-                        page = await context.new_page()
+            page = await context.new_page()
 
-            # 全GraphQLレスポンスを収集するリスト
             graphql_responses = []
 
             async def handle_response(response):
@@ -62,10 +61,8 @@ async def get_tournaments():
 
             print("ページ読み込み中...")
 
-            # networkidle でJS実行完了まで待つ
             await page.goto(URL, wait_until="networkidle", timeout=60000)
 
-            # 追加で待機（遅延APIコールに対応）
             await page.wait_for_timeout(3000)
 
             if not graphql_responses:
