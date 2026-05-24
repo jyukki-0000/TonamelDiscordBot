@@ -21,7 +21,7 @@ bot = commands.Bot(
 
 
 # =========================
-# データ取得
+# 大会取得
 # =========================
 async def get_tournaments():
 
@@ -35,7 +35,6 @@ async def get_tournaments():
         )
 
         context = await browser.new_context()
-
         page = await context.new_page()
 
         print("一覧ページ読み込み中...")
@@ -44,6 +43,9 @@ async def get_tournaments():
         await page.wait_for_timeout(7000)
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
+        # =========================
+        # 一覧取得
+        # =========================
         cards = await page.evaluate("""
         () => {
 
@@ -86,6 +88,9 @@ async def get_tournaments():
 
         today = datetime.now().date()
 
+        # =========================
+        # 詳細取得
+        # =========================
         for card in cards:
 
             try:
@@ -108,49 +113,73 @@ async def get_tournaments():
                 if event_date != today:
                     continue
 
+                print(f"本日の大会: {card['title']}")
+
                 detail_page = await context.new_page()
 
                 try:
 
                     await detail_page.goto(link, wait_until="domcontentloaded", timeout=60000)
-                    await detail_page.wait_for_timeout(4000)
+                    await detail_page.wait_for_timeout(5000)
 
+                    # =========================
+                    # 安定XPath取得（2構造対応）
+                    # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
-                        function get(xpath) {
+                        function get(xpaths) {
 
-                            try {
-                                const res = document.evaluate(
-                                    xpath,
-                                    document,
-                                    null,
-                                    XPathResult.FIRST_ORDERED_NODE_TYPE,
-                                    null
-                                );
+                            for (const xpath of xpaths) {
 
-                                const node = res.singleNodeValue;
-                                return node ? node.textContent.trim() : "—";
+                                try {
+                                    const res = document.evaluate(
+                                        xpath,
+                                        document,
+                                        null,
+                                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                                        null
+                                    );
 
-                            } catch (e) {
-                                return "—";
+                                    const node = res.singleNodeValue;
+
+                                    if (node && node.textContent.trim()) {
+                                        return node.textContent.trim();
+                                    }
+
+                                } catch (e) {}
                             }
+
+                            return "—";
+                        }
+
+                        function getOrganizer() {
+
+                            const el =
+                                document.querySelector(".organization span") ||
+                                document.querySelector(".a-flex.organization span");
+
+                            return el ? el.textContent.trim() : "—";
                         }
 
                         return {
 
-                            schedule: get('//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span'),
+                            schedule: get([
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span',
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/dl/dd[1]/span'
+                            ]),
 
-                            format: get('//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span'),
+                            format: get([
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span',
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/dl/dd[2]/span'
+                            ]),
 
-                            maxPlayers: get('//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span'),
+                            maxPlayers: get([
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span',
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/dl/dd[3]/span'
+                            ]),
 
-                            organizer: (() => {
-                                const el = document.querySelector(
-                                    '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[1]/div[2]/div[1]/a/div/span'
-                                );
-                                return el ? el.textContent.trim() : "—";
-                            })()
+                            organizer: getOrganizer()
                         };
                     }
                     """)
@@ -167,6 +196,9 @@ async def get_tournaments():
 
                     print(f"取得成功: {card['title']}")
 
+                except Exception as e:
+                    print(f"詳細取得失敗: {e}")
+
                 finally:
                     await detail_page.close()
 
@@ -175,11 +207,12 @@ async def get_tournaments():
 
         await browser.close()
 
+    print(f"取得大会数: {len(tournaments)}")
     return tournaments
 
 
 # =========================
-# 削除
+# メッセージ削除
 # =========================
 async def purge_channel(channel):
 
@@ -189,43 +222,6 @@ async def purge_channel(channel):
             await asyncio.sleep(1)
         except:
             pass
-
-
-# =========================
-# UI（Webカード風）
-# =========================
-def create_web_embed(t):
-
-    embed = discord.Embed(
-        title=f"🎮 {t['title']}",
-        url=t["link"],
-        color=0xee4235,
-        description=(
-            f"📅 **開催時間**: {t['schedule']}\n"
-            f"🏆 **形式**: {t['format']}\n"
-            f"👥 **参加上限**: {t['players']}\n"
-            f"🏢 **主催**: {t['organizer']}\n"
-        )
-    )
-
-    if t["image"]:
-        embed.set_thumbnail(url=t["image"])
-
-    embed.add_field(
-        name="🔗 詳細リンク",
-        value=f"[大会ページを開く]({t['link']})",
-        inline=False
-    )
-
-    embed.add_field(
-        name="🌐 コミュニティ",
-        value="[ShadowverseWB情報収集](https://discord.com/invite/gCVcg8JtR6)",
-        inline=False
-    )
-
-    embed.set_footer(text="Tonamel Tournament Viewer")
-
-    return embed
 
 
 # =========================
@@ -239,8 +235,11 @@ async def on_ready():
     channel = bot.get_channel(CHANNEL_ID)
 
     if not channel:
+        print("チャンネル取得失敗")
+        await bot.close()
         return
 
+    print("既存メッセージ削除中...")
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
@@ -250,15 +249,31 @@ async def on_ready():
     if not tournaments:
 
         await channel.send(
-            f"## 🎯 SVWB Tournament Dashboard ─ {today_text}\n"
-            "> 本日の大会はありません"
+            f"## SVWB 大会一覧 ─ {today_text}\n"
+            f"> 本日の大会はありません。"
         )
         return
 
-    await channel.send(f"## 🎯 SVWB Tournament Dashboard ─ {today_text}")
+    await channel.send(f"## SVWB 大会一覧 ─ {today_text}")
 
     for t in tournaments:
-        embed = create_web_embed(t)
+
+        embed = discord.Embed(
+            title=t["title"],
+            url=t["link"],
+            color=0xee4235
+        )
+
+        embed.add_field(name="開催時間", value=t["schedule"], inline=False)
+        embed.add_field(name="主催", value=t["organizer"], inline=True)
+        embed.add_field(name="参加上限", value=t["players"], inline=True)
+        embed.add_field(name="大会形式", value=t["format"], inline=True)
+
+        if t["image"]:
+            embed.set_thumbnail(url=t["image"])
+
+        embed.set_footer(text="ShadowverseWB情報収集")
+
         await channel.send(embed=embed)
 
     print("送信完了")
