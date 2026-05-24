@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import discord
 
@@ -47,7 +48,6 @@ async def get_tournaments():
 
         await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(5000)
-
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
         # =========================
@@ -93,7 +93,7 @@ async def get_tournaments():
 
         print(f"取得カード数: {len(cards)}")
 
-        today_md = datetime.now().strftime("%-m/%-d")
+        today = datetime.now().strftime("%Y/%m/%d")
 
         # =========================
         # 詳細取得
@@ -106,12 +106,25 @@ async def get_tournaments():
                 if not link:
                     continue
 
-                datetime_text = card["datetimeText"]
+                raw_text = card["datetimeText"]
 
-                print(f"日時確認: {datetime_text}")
+                print(f"日時確認: {raw_text}")
 
-                # 当日フィルタ
-                if today_md not in datetime_text:
+                # =========================
+                # 日付抽出（修正ポイント）
+                # =========================
+                match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
+
+                if not match:
+                    continue
+
+                event_date = match.group(0)
+
+                # 正規化
+                event_norm = "/".join(str(int(x)) for x in event_date.split("/"))
+                today_norm = "/".join(str(int(x)) for x in today.split("/"))
+
+                if event_norm != today_norm:
                     continue
 
                 print(f"本日の大会: {card['title']}")
@@ -129,23 +142,31 @@ async def get_tournaments():
                     await detail_page.wait_for_timeout(3000)
 
                     # =========================
-                    # 詳細取得（安定版：ラベル検索）
+                    # 詳細取得（ラベルベース安定）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
                         function findValue(label) {
 
-                            const el = Array.from(document.querySelectorAll("dl, div"))
-                                .find(e => e.innerText && e.innerText.includes(label));
+                            const nodes = Array.from(
+                                document.querySelectorAll("dl, div")
+                            );
 
-                            if (!el) return "—";
+                            for (const n of nodes) {
 
-                            const text = el.innerText.split("\\n");
+                                const text = n.innerText || "";
 
-                            for (let i = 0; i < text.length; i++) {
-                                if (text[i].includes(label)) {
-                                    return text[i + 1] || "—";
+                                if (text.includes(label)) {
+
+                                    const lines = text.split("\\n");
+
+                                    for (let i = 0; i < lines.length; i++) {
+
+                                        if (lines[i].includes(label)) {
+                                            return lines[i + 1] || "—";
+                                        }
+                                    }
                                 }
                             }
 
@@ -234,7 +255,7 @@ async def on_ready():
     today_text = datetime.now().strftime("%Y/%m/%d")
 
     # =========================
-    # 送信
+    # 送信処理
     # =========================
     if not tournaments:
 
