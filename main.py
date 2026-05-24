@@ -21,7 +21,7 @@ bot = commands.Bot(
 
 
 # =========================
-# 取得処理
+# 大会取得
 # =========================
 async def get_tournaments():
 
@@ -109,29 +109,29 @@ async def get_tournaments():
                 try:
 
                     await detail_page.goto(link, wait_until="domcontentloaded", timeout=120000)
-                    await detail_page.wait_for_timeout(4000)
+
+                    # 🔥 表示安定待機
+                    await detail_page.wait_for_selector("span.a-text--medium", timeout=15000)
 
                     # =========================
-                    # 詳細データ（XPath廃止・安定版）
+                    # 詳細取得（innerText固定＝UTC回避）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
-                        const getText = (sel) => {
+                        const get = (sel) => {
                             const el = document.querySelector(sel);
-                            return el ? el.textContent.trim() : "—";
+                            return el ? el.innerText.trim() : "—";
                         };
 
                         return {
 
-                            // 🔥 時間（表示そのまま）
-                            schedule: getText("span.a-text--medium"),
+                            // 🔥 ここが最重要（表示そのまま）
+                            schedule: get("span.a-text--medium"),
 
-                            // 形式（かなり安定）
-                            format: getText("dl dd:nth-child(4) span"),
+                            format: get("dl dd:nth-child(4) span"),
 
-                            // 参加上限
-                            maxPlayers: getText("dl dd:nth-child(6) span")
+                            maxPlayers: get("dl dd:nth-child(6) span")
 
                         };
                     }
