@@ -1,0 +1,30 @@
+name: Tonamel Notify
+
+on:
+  schedule:
+    # 日本時間 朝6時
+    - cron: '0 21 * * *'
+
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Packages
+        run: pip install -r requirements.txt
+
+      - name: Run Bot
+        run: python main.py
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
