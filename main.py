@@ -42,15 +42,14 @@ async def get_tournaments():
 
             print("ページ読み込み中...")
 
-            await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-
-            print("GraphQLレスポンスを待機中...")
-
-            graphql_response = await page.wait_for_response(
+            # expect_response でGraphQLを確実にキャプチャ（ページ移動前に登録）
+            async with page.expect_response(
                 lambda r: GRAPHQL_URL in r.url,
                 timeout=30000
-            )
+            ) as response_info:
+                await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
 
+            graphql_response = await response_info.value
             graphql_data = await graphql_response.json()
 
             print("GraphQL取得成功")
