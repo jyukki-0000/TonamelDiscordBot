@@ -1,5 +1,4 @@
 import os
-import asyncio
 import json
 import discord
 
@@ -11,6 +10,7 @@ TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
 URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP"
+GRAPHQL_URL = "https://tonamel.com/graphql/competition_management"
 
 intents = discord.Intents.default()
 
@@ -23,7 +23,6 @@ bot = commands.Bot(
 async def get_tournaments():
 
     tournaments = []
-    captured_responses = []
 
     try:
 
@@ -32,32 +31,26 @@ async def get_tournaments():
             browser = await p.chromium.launch(headless=True)
 
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                )
             )
 
             page = await context.new_page()
 
+            graphql_data = None
+
             async def handle_response(response):
-                url = response.url
-                if (
-                    "firestore" in url or
-                    "firebase" in url or
-                    "tonamel" in url and (
-                        "competition" in url or
-                        "tournament" in url or
-                        "api" in url
-                    )
-                ):
+                nonlocal graphql_data
+                if GRAPHQL_URL in response.url:
                     try:
-                        body = await response.text()
-                        if "competition" in body.lower() and len(body) > 100:
-                            captured_responses.append({
-                                "url": url,
-                                "body": body[:2000]
-                            })
-                            print(f"キャプチャ: {url[:100]}")
-                    except Exception:
-                        pass
+                        body = await response.json()
+                        print(f"GraphQL取得成功: {json.dumps(body, ensure_ascii=False)[:300]}")
+                        graphql_data = body
+                    except Exception as e:
+                        print(f"GraphQLパースエラー: {e}")
 
             page.on("response", handle_response)
 
@@ -67,59 +60,40 @@ async def get_tournaments():
 
             await page.wait_for_timeout(8000)
 
-            print(f"キャプチャしたレスポンス数: {len(captured_responses)}")
+            await browser.close()
 
-            for r in captured_responses:
-                print(f"URL: {r['url'][:80]}")
-                print(f"Body: {r['body'][:200]}")
-                print("---")
+        if graphql_data:
 
-            links = await page.eval_on_selector_all(
-                "a[href*='/competitions/']",
-                "els => els.map(el => ({href: el.href, text: el.innerText.trim()}))"
+            edges = (
+                graphql_data
+                .get("data", {})
+                .get("publicCompetitions", {})
+                .get("edges", [])
             )
 
-            print(f"取得リンク数: {len(links)}")
+            print(f"エッジ数: {len(edges)}")
 
-            checked = set()
+            for edge in edges[:10]:
 
-            for link in links:
-                href = link.get("href", "")
-                text = link.get("text", "").strip()
+                node = edge.get("node", {})
 
-                if not href or href in checked:
-                    continue
-
-                if "/competitions/" not in href:
-                    continue
-
-                slug = href.rstrip("/").split("/")[-1]
-
-                if not slug or slug == "competitions":
-                    continue
-
-                if "?" in slug:
-                    continue
-
-                checked.add(href)
-
-                title = text if text else slug.replace("-", " ")
-
-                if not title or len(title.strip()) == 0:
-                    title = slug.replace("-", " ")
+                comp_id = node.get("id", "")
+                title = node.get("title", "不明")
+                entry_count = node.get("entryCount") or node.get("participantCount") or "未取得"
+                organizer = node.get("organizerName") or node.get("organizer", {}).get("name") or "未取得"
+                fmt = node.get("tournamentFormat") or node.get("format") or "未取得"
+                url = node.get("url") or f"https://tonamel.com/competitions/{comp_id}"
 
                 tournaments.append({
-                    "title": title[:100],
-                    "link": href,
-                    "players": "未取得",
-                    "organizer": "Tonamel",
-                    "format": "未取得"
+                    "title": title,
+                    "link": url,
+                    "players": str(entry_count),
+                    "organizer": str(organizer),
+                    "format": str(fmt)
                 })
 
-                if len(tournaments) >= 10:
-                    break
-
-            await browser.close()
+        else:
+            print("GraphQLデータが取得できませんでした")
 
     except Exception as e:
         print(f"取得エラー: {e}")
