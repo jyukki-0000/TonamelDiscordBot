@@ -104,7 +104,7 @@ async def get_tournaments():
                 print("RAW:", raw_text)
 
                 # =========================
-                # 日付抽出（安定版）
+                # 日付抽出
                 # =========================
                 match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
 
@@ -116,7 +116,6 @@ async def get_tournaments():
                 except:
                     continue
 
-                # 当日判定
                 if event_date != today:
                     continue
 
@@ -135,42 +134,53 @@ async def get_tournaments():
                     await detail_page.wait_for_timeout(4000)
 
                     # =========================
-                    # 詳細取得（安定版）
+                    # XPath取得（安定版）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
-                        function find(label) {
+                        function get(xpath) {
 
-                            const nodes = Array.from(document.querySelectorAll("dl, div"));
+                            try {
+                                const res = document.evaluate(
+                                    xpath,
+                                    document,
+                                    null,
+                                    XPathResult.FIRST_ORDERED_NODE_TYPE,
+                                    null
+                                );
 
-                            for (const n of nodes) {
+                                const node = res.singleNodeValue;
 
-                                const text = n.innerText || "";
+                                return node
+                                    ? node.textContent.trim()
+                                    : "—";
 
-                                if (text.includes(label)) {
-
-                                    const lines = text.split("\\n");
-
-                                    for (let i = 0; i < lines.length; i++) {
-
-                                        if (lines[i].includes(label)) {
-                                            return lines[i + 1] || "—";
-                                        }
-                                    }
-                                }
+                            } catch (e) {
+                                return "—";
                             }
-
-                            return "—";
                         }
 
-                        const org = document.querySelector(".organization span");
+                        const organizerEl =
+                            document.querySelector(".organization span");
 
                         return {
-                            schedule: find("開催時間"),
-                            format: find("大会形式"),
-                            maxPlayers: find("参加上限"),
-                            organizer: org ? org.textContent.trim() : "—"
+
+                            schedule: get(
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span'
+                            ),
+
+                            maxPlayers: get(
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span'
+                            ),
+
+                            format: get(
+                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span'
+                            ),
+
+                            organizer: organizerEl
+                                ? organizerEl.textContent.trim()
+                                : "—"
                         };
                     }
                     """)
