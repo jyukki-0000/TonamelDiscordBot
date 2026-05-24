@@ -40,30 +40,20 @@ async def get_tournaments():
 
             page = await context.new_page()
 
-            graphql_data = None
-
-            async def handle_response(response):
-                nonlocal graphql_data
-                if GRAPHQL_URL in response.url and graphql_data is None:
-                    try:
-                        body = await response.json()
-                        graphql_data = body
-                        edges = body.get("data", {}).get("publicCompetitions", {}).get("edges", [])
-                        if edges:
-                            print("=== 最初のノード全フィールド ===")
-                            print(json.dumps(edges[0].get("node", {}), ensure_ascii=False, indent=2))
-                            print("=================================")
-                    except Exception as e:
-                        print(f"GraphQLパースエラー: {e}")
-
-            page.on("response", handle_response)
-
             print("ページ読み込み中...")
-            await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(8000)
-            await browser.close()
 
-        if graphql_data:
+            await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+
+            print("GraphQLレスポンスを待機中...")
+
+            graphql_response = await page.wait_for_response(
+                lambda r: GRAPHQL_URL in r.url,
+                timeout=30000
+            )
+
+            graphql_data = await graphql_response.json()
+
+            print("GraphQL取得成功")
 
             edges = (
                 graphql_data
@@ -74,11 +64,14 @@ async def get_tournaments():
 
             print(f"エッジ数: {len(edges)}")
 
+            if edges:
+                print("=== 最初のノード全フィールド ===")
+                print(json.dumps(edges[0].get("node", {}), ensure_ascii=False, indent=2))
+                print("=================================")
+
             for edge in edges[:10]:
 
                 node = edge.get("node", {})
-
-                print(f"node keys: {list(node.keys())}")
 
                 comp_id = node.get("id", "")
                 title = node.get("title", "不明")
@@ -129,8 +122,7 @@ async def get_tournaments():
                     "format": str(fmt)
                 })
 
-        else:
-            print("GraphQLデータが取得できませんでした")
+            await browser.close()
 
     except Exception as e:
         print(f"取得エラー: {e}")
