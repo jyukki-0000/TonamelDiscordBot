@@ -19,13 +19,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install Packages
-        run: pip install discord.py playwright
+        run: pip install -r requirements.txt
 
       - name: Install Playwright Browsers
         run: python -m playwright install chromium --with-deps
 
       - name: Run Bot
-        run: python bot/main.py
+        run: python main.py
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
