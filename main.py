@@ -1,7 +1,9 @@
 import os
-import requests
-from bs4 import BeautifulSoup
+import asyncio
 import discord
+
+from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 from discord.ext import commands
 from datetime import datetime
 
@@ -14,55 +16,64 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-def get_tournaments():
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    res = requests.get(URL, headers=headers)
-
-    soup = BeautifulSoup(res.text, "lxml")
+async def get_tournaments():
 
     tournaments = []
 
-    # Tonamelの大会カード取得
-    cards = soup.select("a[href^='/competitions/']")
+    async with async_playwright() as p:
+
+        browser = await p.chromium.launch(
+            headless=True
+        )
+
+        page = await browser.new_page()
+
+        await page.goto(URL)
+
+        await page.wait_for_timeout(5000)
+
+        html = await page.content()
+
+        await browser.close()
+
+    soup = BeautifulSoup(html, "lxml")
+
+    links = soup.select("a[href^='/competitions/']")
 
     checked = set()
 
-    for card in cards:
+    for link in links:
+
         try:
-            href = card.get("href")
+
+            href = link.get("href")
 
             if not href:
                 continue
 
             full_url = "https://tonamel.com" + href
 
-            # 重複防止
             if full_url in checked:
                 continue
 
             checked.add(full_url)
 
-            text = card.get_text(" ", strip=True)
+            text = link.get_text(" ", strip=True)
 
-            if len(text) < 5:
+            if len(text) < 3:
                 continue
-
-            title = text[:100]
-
-            image_tag = card.select_one("img")
 
             image = None
 
-            if image_tag:
-                image = image_tag.get("src")
+            img = link.select_one("img")
+
+            if img:
+                image = img.get("src")
 
             tournaments.append({
-                "title": title,
+                "title": text[:100],
                 "link": full_url,
-                "players": "取得中",
+                "players": "未取得",
                 "organizer": "Tonamel",
                 "image": image,
                 "format": "未取得"
@@ -76,21 +87,26 @@ def get_tournaments():
 
 @bot.event
 async def on_ready():
+
     print(f"ログイン成功: {bot.user}")
 
     channel = bot.get_channel(CHANNEL_ID)
 
-    tournaments = get_tournaments()
+    tournaments = await get_tournaments()
 
     today = datetime.now().strftime("%Y/%m/%d")
 
     # =========================
-    # 一覧メッセージ
+    # 一覧
     # =========================
 
     message = f"## 【{today} SVWB 大会一覧】\n\n"
 
+    if not tournaments:
+        message += "現在取得できる大会がありません。"
+
     for i, t in enumerate(tournaments, start=1):
+
         message += (
             f"{i}️⃣ "
             f"[{t['title']}]({t['link']})\n"
@@ -101,10 +117,11 @@ async def on_ready():
     await channel.send(message)
 
     # =========================
-    # 各大会Embed
+    # Embed
     # =========================
 
     for t in tournaments:
+
         embed = discord.Embed(
             title=t["title"],
             url=t["link"],
@@ -131,8 +148,6 @@ async def on_ready():
 
         if t["image"]:
             embed.set_thumbnail(url=t["image"])
-
-        embed.set_footer(text="Tonamel Tournament")
 
         await channel.send(embed=embed)
 
