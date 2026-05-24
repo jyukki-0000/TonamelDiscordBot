@@ -44,7 +44,7 @@ async def get_tournaments():
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
         # =========================
-        # 一覧取得
+        # 一覧取得（時間はtextContentのみ）
         # =========================
         cards = await page.evaluate("""
         () => {
@@ -68,10 +68,11 @@ async def get_tournaments():
                     ? titleEl.textContent.trim()
                     : li.textContent.trim().split('\\n')[0];
 
+                // 🔥 datetime属性は完全廃止（ここが誤差原因）
                 const timeEl = li.querySelector('time');
 
                 const datetimeText = timeEl
-                    ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim())
+                    ? timeEl.textContent.trim()
                     : li.textContent;
 
                 return {
@@ -101,6 +102,7 @@ async def get_tournaments():
 
                 raw_text = card["datetimeText"]
 
+                # 日付抽出（表示ベース）
                 match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
                 if not match:
                     continue
@@ -123,7 +125,7 @@ async def get_tournaments():
                     await detail_page.wait_for_timeout(5000)
 
                     # =========================
-                    # 安定XPath取得（2構造対応）
+                    # 安定XPath（表示ベースのみ）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
@@ -153,33 +155,23 @@ async def get_tournaments():
                             return "—";
                         }
 
-                        function getOrganizer() {
-
-                            const el =
-                                document.querySelector(".organization span") ||
-                                document.querySelector(".a-flex.organization span");
-
-                            return el ? el.textContent.trim() : "—";
-                        }
-
                         return {
 
+                            // 🔥 表示テキストのみ（UTC変換一切なし）
                             schedule: get([
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span',
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/dl/dd[1]/span'
+                                '//*[@id="__layout"]//dl/dd[1]//span',
+                                '//*[@id="__layout"]//dd[1]//span'
                             ]),
 
                             format: get([
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span',
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/dl/dd[2]/span'
+                                '//*[@id="__layout"]//dl/dd[2]//span',
+                                '//*[@id="__layout"]//dd[2]//span'
                             ]),
 
                             maxPlayers: get([
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span',
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[2]/div[1]/dl/dd[3]/span'
-                            ]),
-
-                            organizer: getOrganizer()
+                                '//*[@id="__layout"]//dl/dd[3]//span',
+                                '//*[@id="__layout"]//dd[3]//span'
+                            ])
                         };
                     }
                     """)
@@ -189,15 +181,11 @@ async def get_tournaments():
                         "link": link,
                         "image": card["imgSrc"],
                         "schedule": detail["schedule"],
-                        "organizer": detail["organizer"],
                         "players": detail["maxPlayers"],
                         "format": detail["format"]
                     })
 
                     print(f"取得成功: {card['title']}")
-
-                except Exception as e:
-                    print(f"詳細取得失敗: {e}")
 
                 finally:
                     await detail_page.close()
@@ -265,7 +253,6 @@ async def on_ready():
         )
 
         embed.add_field(name="開催時間", value=t["schedule"], inline=False)
-        embed.add_field(name="主催", value=t["organizer"], inline=True)
         embed.add_field(name="参加上限", value=t["players"], inline=True)
         embed.add_field(name="大会形式", value=t["format"], inline=True)
 
