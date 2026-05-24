@@ -13,7 +13,6 @@ URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP
 GRAPHQL_URL = "https://tonamel.com/graphql/competition_management"
 
 intents = discord.Intents.default()
-intents.message_content = True
 
 bot = commands.Bot(
     command_prefix="!",
