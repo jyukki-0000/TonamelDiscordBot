@@ -44,7 +44,7 @@ async def get_tournaments():
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
         # =========================
-        # 一覧取得（時間はtextContentのみ）
+        # 一覧取得
         # =========================
         cards = await page.evaluate("""
         () => {
@@ -68,11 +68,14 @@ async def get_tournaments():
                     ? titleEl.textContent.trim()
                     : li.textContent.trim().split('\\n')[0];
 
-                // 🔥 datetime属性は完全廃止（ここが誤差原因）
-                const timeEl = li.querySelector('time');
+                // ⚠ datetime属性・timeタグは使わない（ズレ原因）
+                const timeSpan =
+                    li.querySelector('span.a-text--medium') ||
+                    li.querySelector('time') ||
+                    li.querySelector('span');
 
-                const datetimeText = timeEl
-                    ? timeEl.textContent.trim()
+                const datetimeText = timeSpan
+                    ? timeSpan.textContent.trim()
                     : li.textContent;
 
                 return {
@@ -102,7 +105,6 @@ async def get_tournaments():
 
                 raw_text = card["datetimeText"]
 
-                # 日付抽出（表示ベース）
                 match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", raw_text)
                 if not match:
                     continue
@@ -125,7 +127,7 @@ async def get_tournaments():
                     await detail_page.wait_for_timeout(5000)
 
                     # =========================
-                    # 安定XPath（表示ベースのみ）
+                    # 詳細取得（時間はそのまま）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
@@ -157,20 +159,18 @@ async def get_tournaments():
 
                         return {
 
-                            // 🔥 表示テキストのみ（UTC変換一切なし）
+                            // 🔥 正しい時間（変換禁止・表示そのまま）
                             schedule: get([
-                                '//*[@id="__layout"]//dl/dd[1]//span',
-                                '//*[@id="__layout"]//dd[1]//span'
+                                '//*[@id="__layout"]//div[contains(@class,"competition-detail")]//dl/dd[1]/span',
+                                '//*[@id="__layout"]//dl/dd[1]/span'
                             ]),
 
                             format: get([
-                                '//*[@id="__layout"]//dl/dd[2]//span',
-                                '//*[@id="__layout"]//dd[2]//span'
+                                '//*[@id="__layout"]//dl/dd[2]/span'
                             ]),
 
                             maxPlayers: get([
-                                '//*[@id="__layout"]//dl/dd[3]//span',
-                                '//*[@id="__layout"]//dd[3]//span'
+                                '//*[@id="__layout"]//dl/dd[3]/span'
                             ])
                         };
                     }
@@ -200,7 +200,7 @@ async def get_tournaments():
 
 
 # =========================
-# メッセージ削除
+# 削除処理
 # =========================
 async def purge_channel(channel):
 
