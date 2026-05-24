@@ -139,53 +139,37 @@ async def get_tournaments():
                         await detail_page.wait_for_timeout(3000)
 
                         detail = await detail_page.evaluate("""
-() => {
+                            () => {
 
-    function findValue(labelText) {
+                                function getText(selector) {
 
-        const items = document.querySelectorAll("dl, div");
+                                    const el = document.querySelector(selector);
 
-        for (const el of items) {
+                                    return el
+                                        ? el.textContent.trim()
+                                        : "—";
+                                }
 
-            const text = el.innerText || "";
+                                return {
 
-            if (text.includes(labelText)) {
+                                    schedule: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(2) > span"
+                                    ),
 
-                const parts = text.split("\\n");
+                                    organizer: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.a-box.competition-card.m-competition-card.a-box--no-radius.a-box--white > div.inner > div.a-flex.organization.a-flex--flex-start.a-flex--row > a > div > span"
+                                    ),
 
-                for (let i = 0; i < parts.length; i++) {
+                                    maxPlayers: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(6) > span"
+                                    ),
 
-                    if (parts[i].includes(labelText)) {
-                        return parts[i + 1] || "—";
-                    }
-                }
-            }
-        }
-
-        return "—";
-    }
-
-    function getOrganizer() {
-
-        const el = document.querySelector(
-            ".organization span"
-        );
-
-        return el ? el.textContent.trim() : "—";
-    }
-
-    return {
-
-        schedule: findValue("開催時間"),
-
-        format: findValue("大会形式"),
-
-        maxPlayers: findValue("参加上限"),
-
-        organizer: getOrganizer()
-    };
-}
-""")
+                                    format: getText(
+                                        "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(4) > span"
+                                    )
+                                };
+                            }
+                        """)
 
                         tournaments.append({
                             "title": card["title"],
