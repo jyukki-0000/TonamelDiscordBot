@@ -2,21 +2,26 @@ import os
 import requests
 import discord
 
+from bs4 import BeautifulSoup
 from discord.ext import commands
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-API_URL = "https://tonamel.com/api/competitions"
-
-params = {
-    "game": "shadowverse_worlds_beyond",
-    "region": "JP"
-}
+URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP"
 
 intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
+
+
+def get_today_string():
+    jst = timezone(timedelta(hours=9))
+    return datetime.now(jst).strftime("%Y/%m/%d")
 
 
 def get_tournaments():
@@ -24,53 +29,96 @@ def get_tournaments():
     tournaments = []
 
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": (
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        )
     }
 
-    response = requests.get(
-        API_URL,
-        params=params,
-        headers=headers
-    )
+    try:
 
-    print("status:", response.status_code)
+        response = requests.get(
+            URL,
+            headers=headers,
+            timeout=15
+        )
 
-    data = response.json()
+        print("status:", response.status_code)
 
-    competitions = data.get("competitions", [])
+        html = response.text
 
-    for comp in competitions[:10]:
+        print("html length:", len(html))
 
-        try:
+        soup = BeautifulSoup(
+            html,
+            "html.parser"
+        )
 
-            title = comp.get("name", "大会名未取得")
+        links = soup.find_all("a")
 
-            slug = comp.get("slug", "")
+        checked = set()
 
-            link = f"https://tonamel.com/competition/{slug}"
+        today = get_today_string()
 
-            organizer = comp.get("owner", {}).get("name", "不明")
+        for link in links:
 
-            participants = (
-                f"{comp.get('participant_count', 0)}"
-                f"/{comp.get('capacity', '?')}"
-            )
+            try:
 
-            image = comp.get("cover_image_url")
+                href = link.get("href")
 
-            format_name = comp.get("format_name", "未取得")
+                if not href:
+                    continue
 
-            tournaments.append({
-                "title": title,
-                "link": link,
-                "players": participants,
-                "organizer": organizer,
-                "image": image,
-                "format": format_name
-            })
+                if "/competitions/" not in href:
+                    continue
 
-        except Exception as e:
-            print("ERROR:", e)
+                full_url = (
+                    "https://tonamel.com" + href
+                )
+
+                if full_url in checked:
+                    continue
+
+                checked.add(full_url)
+
+                text = link.get_text(
+                    " ",
+                    strip=True
+                )
+
+                if len(text) < 5:
+                    continue
+
+                # 最大10件
+                if len(tournaments) >= 10:
+                    break
+
+                image = None
+
+                img = link.find("img")
+
+                if img:
+                    image = img.get("src")
+
+                tournaments.append({
+                    "title": text[:100],
+                    "link": full_url,
+                    "players": "未取得",
+                    "organizer": "Tonamel",
+                    "image": image,
+                    "format": "未取得"
+                })
+
+            except Exception as e:
+                print("大会解析エラー:", e)
+
+    except Exception as e:
+        print("取得エラー:", e)
+
+    print("取得大会数:", len(tournaments))
 
     return tournaments
 
@@ -82,32 +130,49 @@ async def on_ready():
 
     channel = bot.get_channel(CHANNEL_ID)
 
+    if channel is None:
+        print("チャンネル取得失敗")
+        await bot.close()
+        return
+
     tournaments = get_tournaments()
 
-    today = datetime.now().strftime("%Y/%m/%d")
+    today_text = datetime.now().strftime(
+        "%Y/%m/%d"
+    )
 
     # =========================
-    # 一覧メッセージ
+    # 一覧
     # =========================
 
-    message = f"## 【{today} SVWB 大会一覧】\n\n"
+    message = (
+        f"## 【{today_text} SVWB 大会一覧】\n\n"
+    )
 
     if not tournaments:
-        message += "現在取得できる大会がありません。"
-
-    for i, t in enumerate(tournaments, start=1):
 
         message += (
-            f"{i}️⃣ "
-            f"[{t['title']}]({t['link']})\n"
-            f"参加人数: {t['players']}\n"
-            f"主催: {t['organizer']}\n\n"
+            "現在取得できる大会がありません。"
         )
+
+    else:
+
+        for i, t in enumerate(
+            tournaments,
+            start=1
+        ):
+
+            message += (
+                f"{i}️⃣ "
+                f"[{t['title']}]({t['link']})\n"
+                f"参加人数: {t['players']}\n"
+                f"主催: {t['organizer']}\n\n"
+            )
 
     await channel.send(message)
 
     # =========================
-    # 各大会Embed
+    # Embed
     # =========================
 
     for t in tournaments:
@@ -137,9 +202,13 @@ async def on_ready():
         )
 
         if t["image"]:
-            embed.set_thumbnail(url=t["image"])
+            embed.set_thumbnail(
+                url=t["image"]
+            )
 
-        embed.set_footer(text="Tonamel Tournament")
+        embed.set_footer(
+            text="Tonamel Tournament"
+        )
 
         await channel.send(embed=embed)
 
