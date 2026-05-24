@@ -1,5 +1,4 @@
 import os
-import json
 import discord
 
 from discord.ext import commands
@@ -10,7 +9,6 @@ TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
 URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP"
-GRAPHQL_URL = "https://tonamel.com/graphql/competition_management"
 
 intents = discord.Intents.default()
 
@@ -40,146 +38,143 @@ async def get_tournaments():
 
             page = await context.new_page()
 
-            graphql_responses = []
+            print("一覧ページ読み込み中...")
 
-            async def handle_response(response):
-                if GRAPHQL_URL in response.url:
-                    try:
-                        body = await response.json()
-                        edges = (
-                            body.get("data", {})
-                            .get("publicCompetitions", {})
-                            .get("edges", [])
-                        )
-                        print(f"GraphQL受信: edges={len(edges)}")
-                        if edges:
-                            graphql_responses.append(body)
-                    except Exception as e:
-                        print(f"GraphQL解析エラー: {e}")
+            await page.goto(URL, wait_until="networkidle")
 
-            page.on("response", handle_response)
-
-            print("ページ読み込み中...")
-
-            await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-
-            for _ in range(20):
-                if graphql_responses:
-                    break
-                await page.wait_for_timeout(1000)
-
-            if not graphql_responses:
-                print("GraphQLデータなし")
-                await browser.close()
-                return tournaments
-
-            try:
-                await page.wait_for_selector(
-                    "div.competitions-list ul li",
-                    timeout=10000
-                )
-            except Exception:
-                print("li セレクター待機タイムアウト（続行）")
+            await page.wait_for_selector(
+                "div.competitions-list ul li",
+                timeout=30000
+            )
 
             cards = await page.evaluate("""
                 () => {
+
                     const items = document.querySelectorAll(
                         'div.competitions-list ul li'
                     );
-                    return Array.from(items).slice(0, 10).map(li => {
+
+                    return Array.from(items).map(li => {
+
                         const a = li.querySelector('a[href]');
                         const href = a ? a.href : '';
 
                         const img = li.querySelector('img');
                         const imgSrc = img ? img.src : '';
 
-                        const allText = Array.from(li.querySelectorAll('*'))
-                            .filter(el => el.children.length === 0 && el.textContent.trim())
-                            .map(el => ({
-                                tag: el.tagName,
-                                cls: el.className,
-                                text: el.textContent.trim()
-                            }));
+                        const titleEl = li.querySelector('h3');
+                        const title = titleEl
+                            ? titleEl.textContent.trim()
+                            : '不明';
 
                         const timeEl = li.querySelector('time');
-                        const timeAttr = timeEl
-                            ? (timeEl.getAttribute('datetime') || timeEl.textContent.trim())
+
+                        const datetimeText = timeEl
+                            ? (
+                                timeEl.getAttribute('datetime')
+                                || timeEl.textContent.trim()
+                              )
                             : '';
 
-                        return { href, imgSrc, timeAttr, allText };
+                        return {
+                            title,
+                            href,
+                            imgSrc,
+                            datetimeText
+                        };
                     });
                 }
             """)
 
-            print(f"DOMカード数: {len(cards)}")
-            if cards:
-                print("=== カード0 全テキスト要素 ===")
-                print(json.dumps(cards[0], ensure_ascii=False, indent=2))
-                print("==============================")
+            today = datetime.now().strftime("%Y-%m-%d")
 
-            edges = (
-                graphql_responses[-1]
-                .get("data", {})
-                .get("publicCompetitions", {})
-                .get("edges", [])
-            )
+            for card in cards:
 
-            for i, edge in enumerate(edges[:10]):
-                node = edge.get("node", {})
-                card = cards[i] if i < len(cards) else {}
+                link = card["href"]
 
-                comp_id = node.get("id", "")
-                title = node.get("title", "不明")
+                if not link:
+                    continue
 
-                slug = node.get("slug") or node.get("competitionId") or comp_id
-                comp_url = card.get("href") or f"https://tonamel.com/competition/{slug}"
+                datetime_text = card["datetimeText"]
 
-                image_url = card.get("imgSrc") or None
+                # 当日大会のみ
+                if today not in datetime_text:
+                    continue
 
-                schedule = card.get("timeAttr") or "—"
+                print(f"詳細取得: {card['title']}")
 
-                all_text = card.get("allText", [])
-                print(f"[{title}] テキスト要素数: {len(all_text)}")
-                for t in all_text:
-                    print(f"  {t['tag']} cls={t['cls']!r} -> {t['text']!r}")
+                detail_page = await context.new_page()
 
-                entry_count = (
-                    node.get("entryCount") or
-                    node.get("participantCount") or
-                    node.get("currentEntryCount") or
-                    "—"
-                )
+                try:
 
-                organizer_raw = (
-                    node.get("organizerName") or
-                    node.get("organizer") or
-                    node.get("hostName") or
-                    node.get("owner") or
-                    node.get("creator") or
-                    "—"
-                )
-                organizer = (
-                    organizer_raw.get("name") or organizer_raw.get("displayName") or "—"
-                    if isinstance(organizer_raw, dict)
-                    else str(organizer_raw)
-                )
+                    await detail_page.goto(
+                        link,
+                        wait_until="networkidle",
+                        timeout=60000
+                    )
 
-                fmt = (
-                    node.get("tournamentFormat") or
-                    node.get("format") or
-                    node.get("competitionFormat") or
-                    "—"
-                )
+                    detail = await detail_page.evaluate("""
+                        () => {
 
-                tournaments.append({
-                    "title": title,
-                    "link": comp_url,
-                    "players": str(entry_count),
-                    "organizer": organizer,
-                    "format": str(fmt),
-                    "image": image_url,
-                    "schedule": schedule,
-                })
+                            function getText(selector) {
+                                const el = document.querySelector(selector);
+                                return el
+                                    ? el.textContent.trim()
+                                    : "—";
+                            }
+
+                            return {
+
+                                schedule: getText(
+                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(2) > span"
+                                ),
+
+                                organizer: getText(
+                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.a-box.competition-card.m-competition-card.a-box--no-radius.a-box--white > div.inner > div.a-flex.organization.a-flex--flex-start.a-flex--row > a > div > span"
+                                ),
+
+                                maxPlayers: getText(
+                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(6) > span"
+                                ),
+
+                                format: getText(
+                                    "#__layout > div > div.competition-detail > div.competition-detail > div.main > div.detail > div.competition-detail-info.section > div:nth-child(1) > dl > dd:nth-child(4) > span"
+                                )
+                            };
+                        }
+                    """)
+
+                    # 現在人数取得
+                    current_players = await detail_page.evaluate("""
+                        () => {
+
+                            const text = document.body.innerText;
+
+                            const match = text.match(/(\\d+)\\s*\\/\\s*(\\d+)/);
+
+                            if (!match) return "—";
+
+                            return match[1];
+                        }
+                    """)
+
+                    max_players = detail["maxPlayers"]
+
+                    tournaments.append({
+                        "title": card["title"],
+                        "link": link,
+                        "image": card["imgSrc"],
+                        "schedule": detail["schedule"],
+                        "organizer": detail["organizer"],
+                        "players": f"{current_players}/{max_players}",
+                        "format": detail["format"]
+                    })
+
+                except Exception as e:
+                    print(f"詳細取得失敗: {e}")
+
+                finally:
+                    await detail_page.close()
 
             await browser.close()
 
@@ -194,13 +189,16 @@ async def get_tournaments():
 
 
 async def purge_channel(channel):
+
     deleted = 0
+
     async for message in channel.history(limit=None):
         try:
             await message.delete()
             deleted += 1
         except Exception as e:
             print(f"削除エラー: {e}")
+
     print(f"削除完了: {deleted}件")
 
 
@@ -216,7 +214,7 @@ async def on_ready():
         await bot.close()
         return
 
-    print("既存メッセージを削除中...")
+    print("既存メッセージ削除中...")
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
@@ -224,29 +222,59 @@ async def on_ready():
     today_text = datetime.now().strftime("%Y/%m/%d")
 
     if not tournaments:
+
         await channel.send(
             f"## SVWB 大会一覧 ─ {today_text}\n"
-            f"> 現在取得できる大会情報はありません。"
+            f"> 本日の大会はありません。"
         )
+
     else:
-        await channel.send(f"## SVWB 大会一覧 ─ {today_text}")
+
+        await channel.send(
+            f"## SVWB 大会一覧 ─ {today_text}"
+        )
 
         for t in tournaments:
+
             embed = discord.Embed(
                 title=t["title"],
                 url=t["link"],
                 color=0x5865F2
             )
-            embed.add_field(name="開催時間", value=t["schedule"], inline=False)
-            embed.add_field(name="参加人数", value=t["players"], inline=True)
-            embed.add_field(name="主催", value=t["organizer"], inline=True)
-            embed.add_field(name="形式", value=t["format"], inline=True)
+
+            embed.add_field(
+                name="開催時間",
+                value=t["schedule"],
+                inline=False
+            )
+
+            embed.add_field(
+                name="主催",
+                value=t["organizer"],
+                inline=True
+            )
+
+            embed.add_field(
+                name="参加人数",
+                value=t["players"],
+                inline=True
+            )
+
+            embed.add_field(
+                name="大会形式",
+                value=t["format"],
+                inline=True
+            )
+
             if t["image"]:
                 embed.set_image(url=t["image"])
+
             embed.set_footer(text="Tonamel")
+
             await channel.send(embed=embed)
 
     print("送信完了")
+
     await bot.close()
 
 

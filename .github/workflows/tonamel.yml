@@ -1,8 +1,10 @@
-name: Tonamel Notify
+name: Tonamel Tournament Bot
 
 on:
   schedule:
+    # 日本時間 6:00
     - cron: '0 21 * * *'
+
   workflow_dispatch:
 
 jobs:
@@ -13,19 +15,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Python setup
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Packages
-        run: pip install -r requirements.txt
-
-      - name: Install Playwright Browsers
-        run: python -m playwright install chromium --with-deps
+      - name: Install dependencies
+        run: |
+          pip install -U pip
+          pip install discord.py playwright
+          playwright install chromium
 
       - name: Run Bot
-        run: python main.py
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+        run: python main.py
