@@ -1,10 +1,12 @@
 import os
+import re
+import json
 import requests
 import discord
 
 from bs4 import BeautifulSoup
 from discord.ext import commands
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
@@ -17,11 +19,6 @@ bot = commands.Bot(
     command_prefix="!",
     intents=intents
 )
-
-
-def get_today_string():
-    jst = timezone(timedelta(hours=9))
-    return datetime.now(jst).strftime("%Y/%m/%d")
 
 
 def get_tournaments():
@@ -43,7 +40,7 @@ def get_tournaments():
         response = requests.get(
             URL,
             headers=headers,
-            timeout=15
+            timeout=20
         )
 
         print("status:", response.status_code)
@@ -52,31 +49,36 @@ def get_tournaments():
 
         print("html length:", len(html))
 
-        soup = BeautifulSoup(
-            html,
-            "html.parser"
+        # JSON抽出
+        match = re.search(
+            r'window\.__NUXT__=(.*)</script>',
+            html
         )
 
-        links = soup.find_all("a")
+        if not match:
+            print("NUXTデータ取得失敗")
+            return tournaments
+
+        json_text = match.group(1)
+
+        data = json.loads(json_text)
+
+        json_string = json.dumps(data)
+
+        # 大会URL抽出
+        urls = re.findall(
+            r'\/competitions\/[a-zA-Z0-9_-]+',
+            json_string
+        )
 
         checked = set()
 
-        today = get_today_string()
-
-        for link in links:
+        for url in urls:
 
             try:
 
-                href = link.get("href")
-
-                if not href:
-                    continue
-
-                if "/competitions/" not in href:
-                    continue
-
                 full_url = (
-                    "https://tonamel.com" + href
+                    "https://tonamel.com" + url
                 )
 
                 if full_url in checked:
@@ -84,36 +86,25 @@ def get_tournaments():
 
                 checked.add(full_url)
 
-                text = link.get_text(
-                    " ",
-                    strip=True
-                )
+                slug = url.split("/")[-1]
 
-                if len(text) < 5:
-                    continue
+                title = slug.replace("-", " ")
+
+                tournaments.append({
+                    "title": title,
+                    "link": full_url,
+                    "players": "未取得",
+                    "organizer": "Tonamel",
+                    "image": None,
+                    "format": "未取得"
+                })
 
                 # 最大10件
                 if len(tournaments) >= 10:
                     break
 
-                image = None
-
-                img = link.find("img")
-
-                if img:
-                    image = img.get("src")
-
-                tournaments.append({
-                    "title": text[:100],
-                    "link": full_url,
-                    "players": "未取得",
-                    "organizer": "Tonamel",
-                    "image": image,
-                    "format": "未取得"
-                })
-
             except Exception as e:
-                print("大会解析エラー:", e)
+                print("解析エラー:", e)
 
     except Exception as e:
         print("取得エラー:", e)
@@ -200,11 +191,6 @@ async def on_ready():
             value=t["format"],
             inline=False
         )
-
-        if t["image"]:
-            embed.set_thumbnail(
-                url=t["image"]
-            )
 
         embed.set_footer(
             text="Tonamel Tournament"
