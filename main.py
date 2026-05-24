@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import discord
 
@@ -20,7 +21,7 @@ bot = commands.Bot(
 
 
 # =========================
-# 大会取得
+# 取得処理
 # =========================
 async def get_tournaments():
 
@@ -30,19 +31,32 @@ async def get_tournaments():
 
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
         )
 
-        context = await browser.new_context()
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            ),
+            locale="ja-JP"
+        )
+
         page = await context.new_page()
 
         print("一覧ページ読み込み中...")
 
-        await page.goto(URL, wait_until="networkidle", timeout=120000)
+        await page.goto(URL, wait_until="domcontentloaded", timeout=120000)
+        await page.wait_for_timeout(5000)
+
         await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
 
         # =========================
-        # 一覧取得（リンクだけ）
+        # 一覧（軽量取得）
         # =========================
         cards = await page.evaluate("""
         () => {
@@ -94,58 +108,42 @@ async def get_tournaments():
 
                 try:
 
-                    await detail_page.goto(link, wait_until="networkidle", timeout=120000)
+                    await detail_page.goto(link, wait_until="domcontentloaded", timeout=120000)
+                    await detail_page.wait_for_timeout(4000)
 
                     # =========================
-                    # 詳細データ取得（正しい日付span使用）
+                    # 詳細データ（XPath廃止・安定版）
                     # =========================
                     detail = await detail_page.evaluate("""
                     () => {
 
-                        function get(xpath) {
-                            try {
-                                const res = document.evaluate(
-                                    xpath,
-                                    document,
-                                    null,
-                                    XPathResult.FIRST_ORDERED_NODE_TYPE,
-                                    null
-                                );
-
-                                const node = res.singleNodeValue;
-                                return node ? node.textContent.trim() : "—";
-
-                            } catch (e) {
-                                return "—";
-                            }
-                        }
+                        const getText = (sel) => {
+                            const el = document.querySelector(sel);
+                            return el ? el.textContent.trim() : "—";
+                        };
 
                         return {
 
-                            // 🔥 あなたが提示した正しい日付
-                            schedule: get(
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[1]/span'
-                            ),
+                            // 🔥 時間（表示そのまま）
+                            schedule: getText("span.a-text--medium"),
 
-                            format: get(
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[2]/span'
-                            ),
+                            // 形式（かなり安定）
+                            format: getText("dl dd:nth-child(4) span"),
 
-                            maxPlayers: get(
-                                '//*[@id="__layout"]/div/div[1]/div[1]/div[1]/div[2]/div[3]/div[1]/dl/dd[3]/span'
-                            )
+                            // 参加上限
+                            maxPlayers: getText("dl dd:nth-child(6) span")
+
                         };
                     }
                     """)
 
                     # =========================
-                    # 日付判定（ここが唯一の正解）
+                    # 日付抽出（変換なし）
                     # =========================
-                    import re
-
                     match = re.search(r"\d{4}/\d{1,2}/\d{1,2}", detail["schedule"])
 
                     if not match:
+                        print("日付取得失敗:", detail["schedule"])
                         continue
 
                     event_date = datetime.strptime(match.group(0), "%Y/%m/%d").date()
@@ -184,7 +182,7 @@ async def purge_channel(channel):
     async for msg in channel.history(limit=100):
         try:
             await msg.delete()
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
         except:
             pass
 
