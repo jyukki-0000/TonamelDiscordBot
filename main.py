@@ -88,7 +88,14 @@ async def get_tournaments():
 
         print(f"取得カード数: {len(cards)}")
 
-        today = datetime.now().date()
+        # =========================
+        # GitHub Actions が朝6時実行でも
+        # 当日開催大会を取得するため JST 基準にする
+        # =========================
+        now_jst = datetime.now() + timedelta(hours=9)
+        today = now_jst.date()
+
+        weekdays = ["月", "火", "水", "木", "金", "土", "日"]
 
         # =========================
         # 詳細取得
@@ -130,7 +137,7 @@ async def get_tournaments():
                     """)
 
                     # =========================
-                    # 🔥 ここで +9時間補正
+                    # +9時間補正
                     # =========================
                     schedule_text = detail["schedule_raw"]
 
@@ -147,17 +154,22 @@ async def get_tournaments():
                     hour = int(match.group(1))
                     minute = int(match.group(2))
 
-                    # UTC想定で +9時間補正
+                    # Tonamel表示時刻補正
                     corrected = base_date.replace(hour=hour, minute=minute) + timedelta(hours=9)
 
-                    # 表示用フォーマット
-                    display_schedule = corrected.strftime("%Y/%m/%d(日) %H:%M 〜")
-
                     # =========================
-                    # 今日フィルタ（補正後）
+                    # 朝6時実行時に
+                    # 「実行当日開催」の大会だけ送信
                     # =========================
                     if corrected.date() != today:
                         continue
+
+                    weekday = weekdays[corrected.weekday()]
+
+                    # 表示用フォーマット
+                    display_schedule = corrected.strftime(
+                        f"%Y/%m/%d({weekday}) %H:%M 〜"
+                    )
 
                     tournaments.append({
                         "title": card["title"],
@@ -215,17 +227,19 @@ async def on_ready():
 
     tournaments = await get_tournaments()
 
-    today_text = datetime.now().strftime("%Y/%m/%d")
+    today_text = (datetime.now() + timedelta(hours=9)).strftime("%Y/%m/%d")
 
     if not tournaments:
 
         await channel.send(
-            f"## SVWB 大会一覧 ─ {today_text}\n"
+            f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}\n"
             f"> 本日の大会はありません。"
         )
         return
 
-    await channel.send(f"## SVWB 大会一覧 ─ {today_text}")
+    await channel.send(
+        f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}"
+    )
 
     for t in tournaments:
 
