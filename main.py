@@ -47,10 +47,10 @@ async def get_tournaments():
 
         print("一覧ページ読み込み中...")
 
-        await page.goto(URL, wait_until="domcontentloaded", timeout=120000)
-        await page.wait_for_timeout(5000)
+        await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(3000)
 
-        await page.wait_for_selector("div.competitions-list ul li", timeout=30000)
+        await page.wait_for_selector("div.competitions-list ul li", timeout=15000)
 
         # =========================
         # 一覧取得
@@ -88,14 +88,13 @@ async def get_tournaments():
 
         print(f"取得カード数: {len(cards)}")
 
-        # =========================
-        # GitHub Actions が朝6時実行でも
-        # 当日開催大会を取得するため JST 基準にする
-        # =========================
+        # JST基準
         now_jst = datetime.now() + timedelta(hours=9)
         today = now_jst.date()
 
         weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+
+        first_checked = False
 
         # =========================
         # 詳細取得
@@ -112,12 +111,16 @@ async def get_tournaments():
 
                 try:
 
-                    await detail_page.goto(link, wait_until="domcontentloaded", timeout=120000)
-                    await detail_page.wait_for_timeout(4000)
+                    print(f"確認中: {card['title']}")
 
-                    # =========================
-                    # 詳細取得（シンプルDOM）
-                    # =========================
+                    await detail_page.goto(
+                        link,
+                        wait_until="domcontentloaded",
+                        timeout=60000
+                    )
+
+                    await detail_page.wait_for_timeout(2000)
+
                     detail = await detail_page.evaluate("""
                     () => {
 
@@ -127,46 +130,61 @@ async def get_tournaments():
                         };
 
                         return {
-
                             schedule_raw: get("span.a-text--medium"),
                             format: get("dl dd:nth-child(4) span"),
                             maxPlayers: get("dl dd:nth-child(6) span")
-
                         };
                     }
                     """)
 
-                    # =========================
-                    # +9時間補正
-                    # =========================
                     schedule_text = detail["schedule_raw"]
 
-                    match = re.search(r"\d{4}/\d{1,2}/\d{1,2}\(.+?\)\s*(\d{1,2}):(\d{2})", schedule_text)
+                    match = re.search(
+                        r"\d{4}/\d{1,2}/\d{1,2}\(.+?\)\s*(\d{1,2}):(\d{2})",
+                        schedule_text
+                    )
 
                     if not match:
                         print("日付取得失敗:", schedule_text)
                         continue
 
-                    year_month_day = re.search(r"\d{4}/\d{1,2}/\d{1,2}", schedule_text).group(0)
+                    year_month_day = re.search(
+                        r"\d{4}/\d{1,2}/\d{1,2}",
+                        schedule_text
+                    ).group(0)
 
-                    base_date = datetime.strptime(year_month_day, "%Y/%m/%d")
+                    base_date = datetime.strptime(
+                        year_month_day,
+                        "%Y/%m/%d"
+                    )
 
                     hour = int(match.group(1))
                     minute = int(match.group(2))
 
-                    # Tonamel表示時刻補正
-                    corrected = base_date.replace(hour=hour, minute=minute) + timedelta(hours=9)
+                    # Tonamel時間補正
+                    corrected = (
+                        base_date.replace(hour=hour, minute=minute)
+                        + timedelta(hours=9)
+                    )
 
                     # =========================
-                    # 朝6時実行時に
-                    # 「実行当日開催」の大会だけ送信
+                    # 最初の大会日時が当日じゃないなら
+                    # 以降も不要なので即終了
                     # =========================
+                    if not first_checked:
+
+                        first_checked = True
+
+                        if corrected.date() != today:
+                            print("本日の大会一覧ではないため処理終了")
+                            break
+
+                    # 当日以外スキップ
                     if corrected.date() != today:
                         continue
 
                     weekday = weekdays[corrected.weekday()]
 
-                    # 表示用フォーマット
                     display_schedule = corrected.strftime(
                         f"%Y/%m/%d({weekday}) %H:%M 〜"
                     )
@@ -200,9 +218,11 @@ async def get_tournaments():
 async def purge_channel(channel):
 
     async for msg in channel.history(limit=100):
+
         try:
             await msg.delete()
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
+
         except:
             pass
 
@@ -227,7 +247,9 @@ async def on_ready():
 
     tournaments = await get_tournaments()
 
-    today_text = (datetime.now() + timedelta(hours=9)).strftime("%Y/%m/%d")
+    today_text = (
+        datetime.now() + timedelta(hours=9)
+    ).strftime("%Y/%m/%d")
 
     if not tournaments:
 
@@ -235,6 +257,8 @@ async def on_ready():
             f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}\n"
             f"> 本日の大会はありません。"
         )
+
+        await bot.close()
         return
 
     await channel.send(
@@ -249,9 +273,23 @@ async def on_ready():
             color=0xee4235
         )
 
-        embed.add_field(name="開催時間", value=t["schedule"], inline=False)
-        embed.add_field(name="参加上限", value=t["players"], inline=True)
-        embed.add_field(name="大会形式", value=t["format"], inline=True)
+        embed.add_field(
+            name="開催時間",
+            value=t["schedule"],
+            inline=False
+        )
+
+        embed.add_field(
+            name="参加上限",
+            value=t["players"],
+            inline=True
+        )
+
+        embed.add_field(
+            name="大会形式",
+            value=t["format"],
+            inline=True
+        )
 
         if t["image"]:
             embed.set_thumbnail(url=t["image"])
@@ -261,6 +299,7 @@ async def on_ready():
         await channel.send(embed=embed)
 
     print("送信完了")
+
     await bot.close()
 
 
