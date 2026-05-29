@@ -1,5 +1,5 @@
 import os
-import json
+import re
 import asyncio
 import discord
 
@@ -67,141 +67,165 @@ async def get_tournaments():
 
         page = await browser.new_page()
 
-        add_log("Tonamelページアクセス")
+        add_log("Tonamelアクセス")
 
         await page.goto(
             URL,
-            wait_until="networkidle",
+            wait_until="domcontentloaded",
             timeout=60000
         )
 
         await page.wait_for_timeout(5000)
 
-        # =========================
-        # NEXT_DATA取得
-        # =========================
-        next_data = await page.locator(
-            'script#__NEXT_DATA__'
-        ).text_content()
+        html = await page.content()
 
-        if not next_data:
-
-            add_log("__NEXT_DATA__取得失敗")
-
-            await browser.close()
-            return tournaments
-
-        add_log("__NEXT_DATA__取得成功")
-
-        data = json.loads(next_data)
+        add_log(f"HTML取得: {len(html)}文字")
 
         await browser.close()
 
     # =========================
-    # 大会一覧取得
+    # 大会URL取得
     # =========================
-    try:
+    matches = re.findall(
+        r'/competition/([A-Za-z0-9]+)',
+        html
+    )
 
-        competitions = (
-            data["props"]
-            ["pageProps"]
-            ["dehydratedState"]
-            ["queries"]
-        )
+    unique_ids = []
 
-    except Exception as e:
+    for m in matches:
 
-        add_log(f"JSON解析失敗: {e}")
+        if m not in unique_ids:
+            unique_ids.append(m)
+
+    add_log(f"検出大会数: {len(unique_ids)}")
+
+    if not unique_ids:
         return tournaments
 
+    # JST
     now_jst = datetime.utcnow() + timedelta(hours=9)
     today = now_jst.date()
 
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
 
-    found = 0
+    async with async_playwright() as p:
 
-    for query in competitions:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
+        )
 
-        try:
+        context = await browser.new_context()
 
-            state = query.get("state", {})
-            query_data = state.get("data", {})
+        for competition_id in unique_ids[:20]:
 
-            if not isinstance(query_data, dict):
-                continue
+            try:
 
-            comps = query_data.get("competitions")
+                link = (
+                    f"https://tonamel.com/competition/"
+                    f"{competition_id}"
+                )
 
-            if not comps:
-                continue
+                add_log(f"確認中: {competition_id}")
 
-            for c in comps:
+                page = await context.new_page()
 
-                try:
+                await page.goto(
+                    link,
+                    wait_until="domcontentloaded",
+                    timeout=60000
+                )
 
-                    found += 1
+                await page.wait_for_timeout(2000)
 
-                    title = c.get("name", "Tonamel大会")
+                text = await page.locator("body").inner_text()
 
-                    competition_id = c.get("id")
+                # タイトル
+                lines = text.split("\n")
 
-                    if not competition_id:
-                        continue
+                title = "Tonamel大会"
 
-                    url = f"https://tonamel.com/competition/{competition_id}"
+                for line in lines:
 
-                    thumb = ""
+                    line = line.strip()
 
-                    cover = c.get("coverImage")
+                    if len(line) >= 5:
 
-                    if cover:
-                        thumb = cover.get("url", "")
+                        if (
+                            "エントリー" not in line
+                            and "ログイン" not in line
+                            and "Tonamel" not in line
+                        ):
+                            title = line
+                            break
 
-                    schedule = c.get("schedule", {})
+                # 日付
+                match = re.search(
+                    r'(\\d{4}/\\d{1,2}/\\d{1,2}).*?(\\d{1,2}):(\\d{2})',
+                    text
+                )
 
-                    start_at = schedule.get("startedAt")
-
-                    if not start_at:
-                        continue
-
-                    # UTC → JST
-                    dt = datetime.fromisoformat(
-                        start_at.replace("Z", "+00:00")
-                    ) + timedelta(hours=9)
+                if not match:
 
                     add_log(
-                        f"確認: {title} / {dt.strftime('%Y/%m/%d %H:%M')}"
+                        f"日時取得失敗: {competition_id}"
                     )
 
-                    # 今日のみ
-                    if dt.date() != today:
-                        continue
+                    await page.close()
+                    continue
 
-                    weekday = weekdays[dt.weekday()]
+                date_text = match.group(1)
 
-                    display_time = dt.strftime(
-                        f"%Y/%m/%d({weekday}) %H:%M 〜"
-                    )
+                hour = int(match.group(2))
+                minute = int(match.group(3))
 
-                    tournaments.append({
-                        "title": title,
-                        "link": url,
-                        "image": thumb,
-                        "schedule": display_time
-                    })
+                dt = datetime.strptime(
+                    date_text,
+                    "%Y/%m/%d"
+                ).replace(
+                    hour=hour,
+                    minute=minute
+                )
 
-                    add_log(f"取得成功: {title}")
+                add_log(
+                    f"取得日時: {dt.strftime('%Y/%m/%d %H:%M')}"
+                )
 
-                except Exception as e:
+                # 今日判定
+                if dt.date() != today:
 
-                    add_log(f"大会解析失敗: {e}")
+                    await page.close()
+                    continue
 
-        except Exception:
-            pass
+                weekday = weekdays[dt.weekday()]
 
-    add_log(f"一覧検出数: {found}")
-    add_log(f"取得大会数: {len(tournaments)}")
+                display = dt.strftime(
+                    f"%Y/%m/%d({weekday}) %H:%M 〜"
+                )
+
+                tournaments.append({
+                    "title": title,
+                    "link": link,
+                    "schedule": display
+                })
+
+                add_log(f"取得成功: {title}")
+
+                await page.close()
+
+            except Exception as e:
+
+                add_log(
+                    f"大会取得失敗 {competition_id}: {e}"
+                )
+
+        await browser.close()
+
+    add_log(f"最終取得数: {len(tournaments)}")
 
     return tournaments
 
@@ -233,7 +257,7 @@ async def on_ready():
 
     if not channel:
 
-        add_log("大会チャンネル取得失敗")
+        add_log("チャンネル取得失敗")
 
         await send_logs()
         await bot.close()
@@ -280,9 +304,6 @@ async def on_ready():
             value=t["schedule"],
             inline=False
         )
-
-        if t["image"]:
-            embed.set_thumbnail(url=t["image"])
 
         embed.set_footer(text="ShadowverseWB情報収集")
 
