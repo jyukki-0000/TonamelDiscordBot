@@ -10,6 +10,9 @@ from playwright.async_api import async_playwright
 TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
+# 実行ログ送信チャンネル
+LOG_CHANNEL_ID = 1509705370447118407
+
 URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP"
 
 intents = discord.Intents.default()
@@ -21,11 +24,31 @@ bot = commands.Bot(
 
 
 # =========================
+# ログ送信
+# =========================
+async def send_log(message):
+
+    print(message)
+
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+
+    if log_channel:
+
+        try:
+            await log_channel.send(f"```{message}```")
+
+        except Exception as e:
+            print(f"ログ送信失敗: {e}")
+
+
+# =========================
 # 大会取得
 # =========================
 async def get_tournaments():
 
     tournaments = []
+
+    await send_log("Tonamel大会取得開始")
 
     async with async_playwright() as p:
 
@@ -45,12 +68,15 @@ async def get_tournaments():
 
         page = await context.new_page()
 
-        print("一覧ページ読み込み中...")
+        await send_log("一覧ページ読み込み中...")
 
         await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(3000)
 
-        await page.wait_for_selector("div.competitions-list ul li", timeout=15000)
+        await page.wait_for_selector(
+            "div.competitions-list ul li",
+            timeout=15000
+        )
 
         # =========================
         # 一覧取得
@@ -86,15 +112,13 @@ async def get_tournaments():
         }
         """)
 
-        print(f"取得カード数: {len(cards)}")
+        await send_log(f"取得カード数: {len(cards)}")
 
         # JST基準
         now_jst = datetime.now() + timedelta(hours=9)
         today = now_jst.date()
 
         weekdays = ["月", "火", "水", "木", "金", "土", "日"]
-
-        first_checked = False
 
         # =========================
         # 詳細取得
@@ -104,6 +128,7 @@ async def get_tournaments():
             try:
 
                 link = card["href"]
+
                 if not link:
                     continue
 
@@ -111,7 +136,7 @@ async def get_tournaments():
 
                 try:
 
-                    print(f"確認中: {card['title']}")
+                    await send_log(f"確認中: {card['title']}")
 
                     await detail_page.goto(
                         link,
@@ -139,17 +164,23 @@ async def get_tournaments():
 
                     schedule_text = detail["schedule_raw"]
 
+                    await send_log(f"取得日時: {schedule_text}")
+
                     match = re.search(
-                        r"\d{4}/\d{1,2}/\d{1,2}\(.+?\)\s*(\d{1,2}):(\d{2})",
+                        r"\\d{4}/\\d{1,2}/\\d{1,2}\\(.+?\\)\\s*(\\d{1,2}):(\\d{2})",
                         schedule_text
                     )
 
                     if not match:
-                        print("日付取得失敗:", schedule_text)
+
+                        await send_log(
+                            f"日付取得失敗: {schedule_text}"
+                        )
+
                         continue
 
                     year_month_day = re.search(
-                        r"\d{4}/\d{1,2}/\d{1,2}",
+                        r"\\d{4}/\\d{1,2}/\\d{1,2}",
                         schedule_text
                     ).group(0)
 
@@ -161,26 +192,23 @@ async def get_tournaments():
                     hour = int(match.group(1))
                     minute = int(match.group(2))
 
-                    # Tonamel時間補正
-                    corrected = (
-                        base_date.replace(hour=hour, minute=minute)
-                        + timedelta(hours=9)
+                    # JST補正なし
+                    corrected = base_date.replace(
+                        hour=hour,
+                        minute=minute
                     )
 
-                    # =========================
-                    # 最初の大会日時が当日じゃないなら
-                    # 以降も不要なので即終了
-                    # =========================
-                    if not first_checked:
-
-                        first_checked = True
-
-                        if corrected.date() != today:
-                            print("本日の大会一覧ではないため処理終了")
-                            break
+                    await send_log(
+                        f"変換後日時: {corrected.strftime('%Y/%m/%d %H:%M')}"
+                    )
 
                     # 当日以外スキップ
                     if corrected.date() != today:
+
+                        await send_log(
+                            f"当日大会ではないためスキップ: {card['title']}"
+                        )
+
                         continue
 
                     weekday = weekdays[corrected.weekday()]
@@ -198,17 +226,23 @@ async def get_tournaments():
                         "format": detail["format"]
                     })
 
-                    print(f"取得成功: {card['title']}")
+                    await send_log(
+                        f"取得成功: {card['title']}"
+                    )
 
                 finally:
                     await detail_page.close()
 
             except Exception as e:
-                print(f"大会処理失敗: {e}")
+
+                await send_log(
+                    f"大会処理失敗: {str(e)}"
+                )
 
         await browser.close()
 
-    print(f"取得大会数: {len(tournaments)}")
+    await send_log(f"取得大会数: {len(tournaments)}")
+
     return tournaments
 
 
@@ -223,8 +257,8 @@ async def purge_channel(channel):
             await msg.delete()
             await asyncio.sleep(0.3)
 
-        except:
-            pass
+        except Exception as e:
+            print(f"メッセージ削除失敗: {e}")
 
 
 # =========================
@@ -233,16 +267,19 @@ async def purge_channel(channel):
 @bot.event
 async def on_ready():
 
-    print(f"ログイン成功: {bot.user}")
+    await send_log(f"ログイン成功: {bot.user}")
 
     channel = bot.get_channel(CHANNEL_ID)
 
     if not channel:
-        print("チャンネル取得失敗")
+
+        await send_log("チャンネル取得失敗")
+
         await bot.close()
         return
 
-    print("既存メッセージ削除中...")
+    await send_log("既存メッセージ削除中...")
+
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
@@ -252,6 +289,8 @@ async def on_ready():
     ).strftime("%Y/%m/%d")
 
     if not tournaments:
+
+        await send_log("本日の大会なし")
 
         await channel.send(
             f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}\n"
@@ -298,7 +337,9 @@ async def on_ready():
 
         await channel.send(embed=embed)
 
-    print("送信完了")
+        await send_log(f"送信完了: {t['title']}")
+
+    await send_log("全大会送信完了")
 
     await bot.close()
 

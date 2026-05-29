@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -U pip
-          pip install discord.py playwright
+          pip install -r requirements.txt
           playwright install chromium
 
       - name: Run Bot
