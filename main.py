@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright
 TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-# 実行ログ送信チャンネル
+# ログ送信チャンネル
 LOG_CHANNEL_ID = 1509705370447118407
 
 URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP"
@@ -22,23 +22,36 @@ bot = commands.Bot(
     intents=intents
 )
 
+# ログをまとめる
+logs = []
+
+
+# =========================
+# ログ追加
+# =========================
+def add_log(message):
+
+    print(message)
+    logs.append(message)
+
 
 # =========================
 # ログ送信
 # =========================
-async def send_log(message):
-
-    print(message)
+async def send_logs():
 
     log_channel = bot.get_channel(LOG_CHANNEL_ID)
 
-    if log_channel:
+    if not log_channel:
+        return
 
-        try:
-            await log_channel.send(f"```{message}```")
+    text = "\n".join(logs)
 
-        except Exception as e:
-            print(f"ログ送信失敗: {e}")
+    # Discord文字数対策
+    if len(text) > 1900:
+        text = text[-1900:]
+
+    await log_channel.send(f"```{text}```")
 
 
 # =========================
@@ -48,13 +61,16 @@ async def get_tournaments():
 
     tournaments = []
 
-    await send_log("Tonamel大会取得開始")
+    add_log("Tonamel大会取得開始")
 
     async with async_playwright() as p:
 
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage"
+            ]
         )
 
         context = await browser.new_context(
@@ -68,54 +84,64 @@ async def get_tournaments():
 
         page = await context.new_page()
 
-        await send_log("一覧ページ読み込み中...")
+        add_log("一覧ページ読み込み中...")
 
-        await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(3000)
-
-        await page.wait_for_selector(
-            "div.competitions-list ul li",
-            timeout=15000
+        await page.goto(
+            URL,
+            wait_until="networkidle",
+            timeout=60000
         )
 
+        await page.wait_for_timeout(5000)
+
+        # HTML保存デバッグ
+        html = await page.content()
+
+        add_log(f"HTML取得成功: {len(html)}文字")
+
         # =========================
-        # 一覧取得
+        # 大会カード取得
         # =========================
         cards = await page.evaluate("""
         () => {
 
-            const items = document.querySelectorAll('div.competitions-list ul li');
+            const links = document.querySelectorAll('a[href*="/competitions/"]');
 
-            return Array.from(items).map(li => {
+            return Array.from(links).map(a => {
 
-                const a = li.querySelector('a[href]');
-                const href = a ? a.href : '';
+                const title =
+                    a.textContent
+                    .replace(/\\s+/g, ' ')
+                    .trim();
 
-                const img = li.querySelector('img');
-                const imgSrc = img ? img.src : '';
-
-                const titleEl =
-                    li.querySelector('h3') ||
-                    li.querySelector('h2') ||
-                    li.querySelector('[class*="title"]');
-
-                const title = titleEl
-                    ? titleEl.textContent.trim()
-                    : li.textContent.trim().split('\\n')[0];
+                const img = a.querySelector('img');
 
                 return {
-                    title,
-                    href,
-                    imgSrc
+                    title: title,
+                    href: a.href,
+                    imgSrc: img ? img.src : ''
                 };
             });
         }
         """)
 
-        await send_log(f"取得カード数: {len(cards)}")
+        # 重複削除
+        unique_cards = []
+        used = set()
 
-        # JST基準
-        now_jst = datetime.now() + timedelta(hours=9)
+        for c in cards:
+
+            if c["href"] in used:
+                continue
+
+            used.add(c["href"])
+            unique_cards.append(c)
+
+        cards = unique_cards
+
+        add_log(f"取得カード数: {len(cards)}")
+
+        now_jst = datetime.utcnow() + timedelta(hours=9)
         today = now_jst.date()
 
         weekdays = ["月", "火", "水", "木", "金", "土", "日"]
@@ -132,116 +158,91 @@ async def get_tournaments():
                 if not link:
                     continue
 
+                add_log(f"確認中: {link}")
+
                 detail_page = await context.new_page()
 
-                try:
+                await detail_page.goto(
+                    link,
+                    wait_until="networkidle",
+                    timeout=60000
+                )
 
-                    await send_log(f"確認中: {card['title']}")
+                await detail_page.wait_for_timeout(3000)
 
-                    await detail_page.goto(
-                        link,
-                        wait_until="domcontentloaded",
-                        timeout=60000
-                    )
+                text = await detail_page.locator("body").inner_text()
 
-                    await detail_page.wait_for_timeout(2000)
+                # 日付検索
+                match = re.search(
+                    r"(\\d{4}/\\d{1,2}/\\d{1,2}).*?(\\d{1,2}):(\\d{2})",
+                    text
+                )
 
-                    detail = await detail_page.evaluate("""
-                    () => {
+                if not match:
 
-                        const get = (sel) => {
-                            const el = document.querySelector(sel);
-                            return el ? el.textContent.trim() : "—";
-                        };
-
-                        return {
-                            schedule_raw: get("span.a-text--medium"),
-                            format: get("dl dd:nth-child(4) span"),
-                            maxPlayers: get("dl dd:nth-child(6) span")
-                        };
-                    }
-                    """)
-
-                    schedule_text = detail["schedule_raw"]
-
-                    await send_log(f"取得日時: {schedule_text}")
-
-                    match = re.search(
-                        r"\\d{4}/\\d{1,2}/\\d{1,2}\\(.+?\\)\\s*(\\d{1,2}):(\\d{2})",
-                        schedule_text
-                    )
-
-                    if not match:
-
-                        await send_log(
-                            f"日付取得失敗: {schedule_text}"
-                        )
-
-                        continue
-
-                    year_month_day = re.search(
-                        r"\\d{4}/\\d{1,2}/\\d{1,2}",
-                        schedule_text
-                    ).group(0)
-
-                    base_date = datetime.strptime(
-                        year_month_day,
-                        "%Y/%m/%d"
-                    )
-
-                    hour = int(match.group(1))
-                    minute = int(match.group(2))
-
-                    # JST補正なし
-                    corrected = base_date.replace(
-                        hour=hour,
-                        minute=minute
-                    )
-
-                    await send_log(
-                        f"変換後日時: {corrected.strftime('%Y/%m/%d %H:%M')}"
-                    )
-
-                    # 当日以外スキップ
-                    if corrected.date() != today:
-
-                        await send_log(
-                            f"当日大会ではないためスキップ: {card['title']}"
-                        )
-
-                        continue
-
-                    weekday = weekdays[corrected.weekday()]
-
-                    display_schedule = corrected.strftime(
-                        f"%Y/%m/%d({weekday}) %H:%M 〜"
-                    )
-
-                    tournaments.append({
-                        "title": card["title"],
-                        "link": link,
-                        "image": card["imgSrc"],
-                        "schedule": display_schedule,
-                        "players": detail["maxPlayers"],
-                        "format": detail["format"]
-                    })
-
-                    await send_log(
-                        f"取得成功: {card['title']}"
-                    )
-
-                finally:
+                    add_log("日付取得失敗")
                     await detail_page.close()
+                    continue
+
+                date_text = match.group(1)
+
+                hour = int(match.group(2))
+                minute = int(match.group(3))
+
+                base_date = datetime.strptime(
+                    date_text,
+                    "%Y/%m/%d"
+                )
+
+                corrected = base_date.replace(
+                    hour=hour,
+                    minute=minute
+                )
+
+                add_log(
+                    f"取得日時: {corrected.strftime('%Y/%m/%d %H:%M')}"
+                )
+
+                # 当日判定
+                if corrected.date() != today:
+
+                    add_log("当日大会ではないためスキップ")
+
+                    await detail_page.close()
+                    continue
+
+                weekday = weekdays[corrected.weekday()]
+
+                display_schedule = corrected.strftime(
+                    f"%Y/%m/%d({weekday}) %H:%M 〜"
+                )
+
+                # タイトル補正
+                title = card["title"]
+
+                if len(title) < 3:
+                    title = "Tonamel大会"
+
+                tournaments.append({
+                    "title": title,
+                    "link": link,
+                    "image": card["imgSrc"],
+                    "schedule": display_schedule,
+                    "players": "Tonamel参照",
+                    "format": "Tonamel参照"
+                })
+
+                add_log(f"取得成功: {title}")
+
+                await detail_page.close()
 
             except Exception as e:
 
-                await send_log(
-                    f"大会処理失敗: {str(e)}"
-                )
+                add_log(f"大会処理失敗: {str(e)}")
 
         await browser.close()
 
-    await send_log(f"取得大会数: {len(tournaments)}")
+    add_log(f"取得大会数: {len(tournaments)}")
 
     return tournaments
 
@@ -258,7 +259,7 @@ async def purge_channel(channel):
             await asyncio.sleep(0.3)
 
         except Exception as e:
-            print(f"メッセージ削除失敗: {e}")
+            add_log(f"削除失敗: {e}")
 
 
 # =========================
@@ -267,35 +268,38 @@ async def purge_channel(channel):
 @bot.event
 async def on_ready():
 
-    await send_log(f"ログイン成功: {bot.user}")
+    add_log(f"ログイン成功: {bot.user}")
 
     channel = bot.get_channel(CHANNEL_ID)
 
     if not channel:
 
-        await send_log("チャンネル取得失敗")
+        add_log("チャンネル取得失敗")
 
+        await send_logs()
         await bot.close()
         return
 
-    await send_log("既存メッセージ削除中...")
+    add_log("既存メッセージ削除中...")
 
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
 
     today_text = (
-        datetime.now() + timedelta(hours=9)
+        datetime.utcnow() + timedelta(hours=9)
     ).strftime("%Y/%m/%d")
 
     if not tournaments:
 
-        await send_log("本日の大会なし")
+        add_log("本日の大会なし")
 
         await channel.send(
             f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}\n"
             f"> 本日の大会はありません。"
         )
+
+        await send_logs()
 
         await bot.close()
         return
@@ -337,9 +341,11 @@ async def on_ready():
 
         await channel.send(embed=embed)
 
-        await send_log(f"送信完了: {t['title']}")
+        add_log(f"送信完了: {t['title']}")
 
-    await send_log("全大会送信完了")
+    add_log("全大会送信完了")
+
+    await send_logs()
 
     await bot.close()
 
