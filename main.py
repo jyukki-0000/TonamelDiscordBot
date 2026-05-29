@@ -95,6 +95,9 @@ async def get_tournaments():
 
     for m in matches:
 
+        if m == "index":
+            continue
+
         if m not in unique_ids:
             unique_ids.append(m)
 
@@ -140,36 +143,71 @@ async def get_tournaments():
                     timeout=60000
                 )
 
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(5000)
 
                 text = await page.locator("body").inner_text()
 
-                # タイトル
-                lines = text.split("\n")
+                html = await page.content()
 
+                # =========================
+                # デバッグ保存
+                # =========================
+                if competition_id == "ft50T":
+
+                    with open(
+                        "debug_ft50T.txt",
+                        "w",
+                        encoding="utf-8"
+                    ) as f:
+                        f.write(text)
+
+                    with open(
+                        "debug_ft50T_html.txt",
+                        "w",
+                        encoding="utf-8"
+                    ) as f:
+                        f.write(html)
+
+                    add_log("ft50Tデバッグ保存")
+
+                # =========================
+                # タイトル取得
+                # =========================
                 title = "Tonamel大会"
 
-                for line in lines:
-
-                    line = line.strip()
-
-                    if len(line) >= 5:
-
-                        if (
-                            "エントリー" not in line
-                            and "ログイン" not in line
-                            and "Tonamel" not in line
-                        ):
-                            title = line
-                            break
-
-                # 日付
-                match = re.search(
-                    r'(\\d{4}/\\d{1,2}/\\d{1,2}).*?(\\d{1,2}):(\\d{2})',
-                    text
+                title_match = re.search(
+                    r"<title>(.*?)</title>",
+                    html,
+                    re.DOTALL
                 )
 
-                if not match:
+                if title_match:
+
+                    title = (
+                        title_match.group(1)
+                        .replace("| Tonamel", "")
+                        .strip()
+                    )
+
+                # =========================
+                # 日付取得
+                # =========================
+                date_match = re.search(
+                    r'(20\\d{2}/\\d{1,2}/\\d{1,2}).{0,30}?(\\d{1,2}:\\d{2})',
+                    text,
+                    re.DOTALL
+                )
+
+                # HTMLからも探す
+                if not date_match:
+
+                    date_match = re.search(
+                        r'(20\\d{2}/\\d{1,2}/\\d{1,2}).{0,30}?(\\d{1,2}:\\d{2})',
+                        html,
+                        re.DOTALL
+                    )
+
+                if not date_match:
 
                     add_log(
                         f"日時取得失敗: {competition_id}"
@@ -178,10 +216,11 @@ async def get_tournaments():
                     await page.close()
                     continue
 
-                date_text = match.group(1)
+                date_text = date_match.group(1)
+                time_text = date_match.group(2)
 
-                hour = int(match.group(2))
-                minute = int(match.group(3))
+                hour = int(time_text.split(":")[0])
+                minute = int(time_text.split(":")[1])
 
                 dt = datetime.strptime(
                     date_text,
@@ -195,8 +234,12 @@ async def get_tournaments():
                     f"取得日時: {dt.strftime('%Y/%m/%d %H:%M')}"
                 )
 
+                # =========================
                 # 今日判定
+                # =========================
                 if dt.date() != today:
+
+                    add_log("当日大会ではない")
 
                     await page.close()
                     continue
