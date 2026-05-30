@@ -127,6 +127,8 @@ async def get_tournaments():
                 date_text = date_match.group(1).replace("-", "/")
                 time_text = date_match.group(2)
 
+add_log(f"取得日付文字列: {date_text}")
+add_log(f"取得時刻文字列: {time_text}")
                 dt = datetime.strptime(
                     f"{date_text} {time_text}",
                     "%Y/%m/%d %H:%M"
