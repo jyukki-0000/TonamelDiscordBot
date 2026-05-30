@@ -30,7 +30,6 @@ def add_log(message):
 
 
 def get_today_jst():
-    """日本時間（JST）での今日の日付を返す"""
     return datetime.now(JST).date()
 
 
@@ -38,75 +37,121 @@ async def send_logs():
     channel = bot.get_channel(LOG_CHANNEL_ID)
     if not channel:
         return
-
     text = "\n".join(logs)
-    # 1900文字超えたら複数に分割して送信
     while text:
         await channel.send(f"```{text[:1900]}```")
         text = text[1900:]
 
 
+async def fetch_detail(context, competition_id):
+    """
+    各大会ページから「時刻」と「トーナメント形式」を取得する。
+    当日大会のみ呼ばれるため件数は少ない。
+    失敗時は (None, None) を返す。
+    """
+    url = f"https://tonamel.com/competition/{competition_id}"
+    for attempt in range(1, 4):
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=90000)
+            await page.wait_for_timeout(3000)
+            text = await page.locator("body").inner_text()
+            html = await page.content()
+            await page.close()
+
+            # 時刻: 一覧にある日付の直後に "HH:MM" が続くパターン
+            time_match = re.search(
+                r'20\d{2}/\d{1,2}/\d{1,2}[^\d]*?(\d{1,2}:\d{2})', text
+            )
+            start_time = time_match.group(1) if time_match else None
+
+            # トーナメント形式: "シングルエリミネーション" "ダブルエリミネーション"
+            # "スイス式" "総当たり" 等をテキストから探す
+            format_match = re.search(
+                r'(シングルエリミネーション|ダブルエリミネーション|スイス式|総当たり|リーグ戦|Swiss)',
+                text
+            )
+            tournament_format = format_match.group(1) if format_match else None
+
+            return start_time, tournament_format
+
+        except Exception as e:
+            await page.close()
+            add_log(f"詳細取得失敗 試行{attempt}/3: {competition_id} - {e}")
+            if attempt < 3:
+                await asyncio.sleep(3)
+
+    return None, None
+
+
 async def get_tournaments(today):
-    """
-    大会一覧ページのHTMLから直接、当日開催の大会を取得する。
-    各大会ページへの個別アクセスは不要。
-    """
     tournaments = []
 
+    # ---- 大会一覧ページ取得 ----
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         page = await browser.new_page()
-
         add_log("Tonamelアクセス")
 
-        # networkidle で待機（SPAのレンダリング完了を待つ）
         try:
             await page.goto(URL, wait_until="networkidle", timeout=90000)
         except Exception:
-            # タイムアウトしても取得を試みる
             add_log("networkidle タイムアウト、取得を続行")
 
         await page.wait_for_timeout(3000)
-
         html = await page.content()
         await browser.close()
 
     add_log(f"HTML取得: {len(html)}文字")
 
     soup = BeautifulSoup(html, "html.parser")
-
-    # 大会カード: <li class="list-item"> の中に <a href="/competition/ID"> がある
     items = soup.select("li.list-item")
     add_log(f"検出大会数: {len(items)}")
 
     if not items:
-        add_log("大会リストが取得できませんでした（レンダリング未完了の可能性あり）")
+        add_log("大会リストが取得できませんでした")
         return tournaments
 
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
 
+    # 一覧から当日大会を抽出
+    today_items = []
     for item in items:
         try:
-            # ID・リンク取得
             a_tag = item.select_one('a[href^="/competition/"]')
             if not a_tag:
                 continue
-            href = a_tag["href"]  # 例: /competition/ft50T
-            competition_id = href.split("/")[-1]
-            link = f"https://tonamel.com{href}"
+            competition_id = a_tag["href"].split("/")[-1]
+            link = f"https://tonamel.com{a_tag['href']}"
 
-            # タイトル取得: class に "title" を含む span
             title_tag = item.select_one("span.title")
             title = title_tag.get_text(strip=True) if title_tag else "Tonamel大会"
 
-            # 日付取得: "2026/05/30(土)" 形式のテキストを持つ span を探す
+            # 画像URL
+            img_tag = item.select_one("div.widescreen img")
+            image_url = None
+            if img_tag and img_tag.get("src"):
+                src = img_tag["src"]
+                image_url = f"https:{src}" if src.startswith("//") else src
+
+            # 参加人数上限: "2/64" -> "64"
+            capacity = None
+            spans = item.select("div.competition-items div.competition-data span")
+            for span in spans:
+                t = span.get_text(strip=True)
+                m = re.match(r'^\d+/(\d+)$', t)
+                if m:
+                    capacity = m.group(1)
+                    break
+
+            # 日付
             date_text = None
-            for span in item.select("span"):
-                text = span.get_text(strip=True)
-                m = re.match(r"(20\d{2}/\d{1,2}/\d{1,2})", text)
+            for span in spans:
+                t = span.get_text(strip=True)
+                m = re.match(r'(20\d{2}/\d{1,2}/\d{1,2})', t)
                 if m:
                     date_text = m.group(1)
                     break
@@ -115,25 +160,62 @@ async def get_tournaments(today):
                 add_log(f"日付取得失敗: {competition_id} ({title})")
                 continue
 
-            add_log(f"確認中: {competition_id} / {date_text} / {title}")
-
             dt_date = datetime.strptime(date_text, "%Y/%m/%d").date()
 
-            if dt_date != today:
-                add_log(f"当日大会ではない ({date_text})")
-                continue
+            add_log(f"確認中: {competition_id} / {date_text} / {title}")
 
-            # 時刻は一覧ページに含まれないため、開催時刻は「-」で表示
-            weekday = weekdays[dt_date.weekday()]
-            tournaments.append({
-                "title": title,
-                "link": link,
-                "schedule": dt_date.strftime(f"%Y/%m/%d({weekday})")
-            })
-            add_log(f"取得成功: {title}")
+            if dt_date == today:
+                today_items.append({
+                    "id": competition_id,
+                    "link": link,
+                    "title": title,
+                    "image_url": image_url,
+                    "capacity": capacity,
+                    "date": dt_date,
+                })
+                add_log(f"当日大会: {title}")
+            elif dt_date > today:
+                # 未来の大会が出た時点で中断
+                add_log(f"未来の大会を検出、処理を中断: {competition_id} ({date_text})")
+                break
+            else:
+                add_log(f"過去の大会のためスキップ: {date_text}")
 
         except Exception as e:
             add_log(f"パース失敗: {e}")
+
+    add_log(f"当日大会数: {len(today_items)}")
+
+    if not today_items:
+        return tournaments
+
+    # ---- 当日大会のみ詳細ページにアクセスして時刻・形式を取得 ----
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        context = await browser.new_context()
+
+        for t_item in today_items:
+            add_log(f"詳細取得: {t_item['id']}")
+            start_time, tournament_format = await fetch_detail(context, t_item["id"])
+
+            weekday = weekdays[t_item["date"].weekday()]
+            date_str = t_item["date"].strftime(f"%Y/%m/%d({weekday})")
+            schedule = f"{date_str} {start_time} ～" if start_time else date_str
+
+            tournaments.append({
+                "title": t_item["title"],
+                "link": t_item["link"],
+                "image_url": t_item["image_url"],
+                "schedule": schedule,
+                "capacity": t_item["capacity"],
+                "format": tournament_format,
+            })
+            add_log(f"取得成功: {t_item['title']} / {schedule} / 形式:{tournament_format} / 上限:{t_item['capacity']}")
+
+        await browser.close()
 
     add_log(f"最終取得数: {len(tournaments)}")
     return tournaments
@@ -153,7 +235,6 @@ async def on_ready():
     add_log(f"ログイン成功: {bot.user}")
 
     channel = bot.get_channel(CHANNEL_ID)
-
     if not channel:
         add_log("チャンネル取得失敗")
         await send_logs()
@@ -189,11 +270,17 @@ async def on_ready():
             url=t["link"],
             color=0xee4235
         )
-        embed.add_field(
-            name="開催日",
-            value=t["schedule"],
-            inline=False
-        )
+        embed.add_field(name="開催日時", value=t["schedule"], inline=False)
+
+        if t["format"]:
+            embed.add_field(name="形式", value=t["format"], inline=True)
+
+        if t["capacity"]:
+            embed.add_field(name="参加人数上限", value=f"{t['capacity']}人", inline=True)
+
+        if t["image_url"]:
+            embed.set_image(url=t["image_url"])
+
         embed.set_footer(text="ShadowverseWB情報収集")
         await channel.send(embed=embed)
 
