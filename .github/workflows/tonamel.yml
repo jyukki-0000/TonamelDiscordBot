@@ -5,7 +5,7 @@ on:
   schedule:
     # 日本時間 6:00 = UTC 21:00 (前日)
     # - cron: '0 21 * * *'
-    - cron: '30 4 * * *'  # JST 13:30
+    - cron: '0 21 * * *'
 
   workflow_dispatch:
 
