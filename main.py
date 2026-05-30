@@ -15,67 +15,43 @@ LOG_CHANNEL_ID = 1509705370447118407
 URL = "https://tonamel.com/competitions?game=shadowverse_worlds_beyond&region=JP"
 
 intents = discord.Intents.default()
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 logs = []
 
 
-# =========================
-# ログ
-# =========================
 def add_log(message):
-
     print(message)
     logs.append(message)
 
 
 async def send_logs():
-
     channel = bot.get_channel(LOG_CHANNEL_ID)
-
     if not channel:
         return
 
     text = "\n".join(logs)
-
     if len(text) > 1900:
         text = text[-1900:]
 
     await channel.send(f"```{text}```")
 
 
-# =========================
-# 大会取得
-# =========================
 async def get_tournaments():
-
     tournaments = []
 
     async with async_playwright() as p:
-
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage"
-            ]
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
 
         page = await browser.new_page()
 
         add_log("Tonamelアクセス")
 
-        await page.goto(
-            URL,
-            wait_until="domcontentloaded",
-            timeout=60000
-        )
-
-        await page.wait_for_timeout(5000)
+        await page.goto(URL, wait_until="networkidle", timeout=60000)
+        await page.wait_for_timeout(3000)
 
         html = await page.content()
 
@@ -83,259 +59,151 @@ async def get_tournaments():
 
         await browser.close()
 
-    # =========================
-    # 大会URL取得
-    # =========================
-    matches = re.findall(
-        r'/competition/([A-Za-z0-9]+)',
-        html
-    )
+    matches = re.findall(r'/competition/([A-Za-z0-9]+)', html)
 
     unique_ids = []
-
     for m in matches:
-
-        if m == "index":
-            continue
-
-        if m not in unique_ids:
+        if m != "index" and m not in unique_ids:
             unique_ids.append(m)
 
     add_log(f"検出大会数: {len(unique_ids)}")
 
-    if not unique_ids:
-        return tournaments
-
-    # JST
     now_jst = datetime.utcnow() + timedelta(hours=9)
     today = now_jst.date()
 
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
 
     async with async_playwright() as p:
-
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage"
-            ]
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
 
         context = await browser.new_context()
 
         for competition_id in unique_ids[:20]:
-
             try:
-
-                link = (
-                    f"https://tonamel.com/competition/"
-                    f"{competition_id}"
-                )
+                link = f"https://tonamel.com/competition/{competition_id}"
 
                 add_log(f"確認中: {competition_id}")
 
                 page = await context.new_page()
-
-                await page.goto(
-                    link,
-                    wait_until="domcontentloaded",
-                    timeout=60000
-                )
-
-                await page.wait_for_timeout(5000)
+                await page.goto(link, wait_until="networkidle", timeout=60000)
+                await page.wait_for_timeout(2000)
 
                 text = await page.locator("body").inner_text()
-
                 html = await page.content()
 
-                # =========================
-                # デバッグ保存
-                # =========================
-                if competition_id == "ft50T":
-
-                    with open(
-                        "debug_ft50T.txt",
-                        "w",
-                        encoding="utf-8"
-                    ) as f:
-                        f.write(text)
-
-                    with open(
-                        "debug_ft50T_html.txt",
-                        "w",
-                        encoding="utf-8"
-                    ) as f:
-                        f.write(html)
-
-                    add_log("ft50Tデバッグ保存")
-
-                # =========================
-                # タイトル取得
-                # =========================
                 title = "Tonamel大会"
-
-                title_match = re.search(
-                    r"<title>(.*?)</title>",
-                    html,
-                    re.DOTALL
-                )
-
+                title_match = re.search(r"<title>(.*?)</title>", html, re.DOTALL)
                 if title_match:
+                    title = title_match.group(1).replace("| Tonamel", "").strip()
 
-                    title = (
-                        title_match.group(1)
-                        .replace("| Tonamel", "")
-                        .strip()
-                    )
+                # 修正点:
+                # 元コードは \\d を使っていたため日時が取得できなかった
+                patterns = [
+                    r'(20\d{2}/\d{1,2}/\d{1,2}).{0,50}?(\d{1,2}:\d{2})',
+                    r'(20\d{2}-\d{1,2}-\d{1,2}).{0,50}?(\d{1,2}:\d{2})',
+                ]
 
-                # =========================
-                # 日付取得
-                # =========================
-                date_match = re.search(
-                    r'(20\\d{2}/\\d{1,2}/\\d{1,2}).{0,30}?(\\d{1,2}:\\d{2})',
-                    text,
-                    re.DOTALL
-                )
+                date_match = None
 
-                # HTMLからも探す
-                if not date_match:
-
-                    date_match = re.search(
-                        r'(20\\d{2}/\\d{1,2}/\\d{1,2}).{0,30}?(\\d{1,2}:\\d{2})',
-                        html,
-                        re.DOTALL
-                    )
+                for pattern in patterns:
+                    date_match = re.search(pattern, text, re.DOTALL)
+                    if date_match:
+                        break
 
                 if not date_match:
+                    for pattern in patterns:
+                        date_match = re.search(pattern, html, re.DOTALL)
+                        if date_match:
+                            break
 
-                    add_log(
-                        f"日時取得失敗: {competition_id}"
-                    )
-
+                if not date_match:
+                    add_log(f"日時取得失敗: {competition_id}")
                     await page.close()
                     continue
 
-                date_text = date_match.group(1)
+                date_text = date_match.group(1).replace("-", "/")
                 time_text = date_match.group(2)
 
-                hour = int(time_text.split(":")[0])
-                minute = int(time_text.split(":")[1])
-
                 dt = datetime.strptime(
-                    date_text,
-                    "%Y/%m/%d"
-                ).replace(
-                    hour=hour,
-                    minute=minute
+                    f"{date_text} {time_text}",
+                    "%Y/%m/%d %H:%M"
                 )
 
-                add_log(
-                    f"取得日時: {dt.strftime('%Y/%m/%d %H:%M')}"
-                )
+                add_log(f"取得日時: {dt.strftime('%Y/%m/%d %H:%M')}")
 
-                # =========================
-                # 今日判定
-                # =========================
                 if dt.date() != today:
-
                     add_log("当日大会ではない")
-
                     await page.close()
                     continue
 
                 weekday = weekdays[dt.weekday()]
 
-                display = dt.strftime(
-                    f"%Y/%m/%d({weekday}) %H:%M 〜"
-                )
-
                 tournaments.append({
                     "title": title,
                     "link": link,
-                    "schedule": display
+                    "schedule": dt.strftime(f"%Y/%m/%d({weekday}) %H:%M ～")
                 })
 
                 add_log(f"取得成功: {title}")
-
                 await page.close()
 
             except Exception as e:
-
-                add_log(
-                    f"大会取得失敗 {competition_id}: {e}"
-                )
+                add_log(f"大会取得失敗 {competition_id}: {e}")
 
         await browser.close()
 
     add_log(f"最終取得数: {len(tournaments)}")
-
     return tournaments
 
 
-# =========================
-# メッセージ削除
-# =========================
 async def purge_channel(channel):
-
     async for msg in channel.history(limit=100):
-
         try:
             await msg.delete()
             await asyncio.sleep(0.3)
-
-        except:
+        except Exception:
             pass
 
 
-# =========================
-# 起動
-# =========================
 @bot.event
 async def on_ready():
-
     add_log(f"ログイン成功: {bot.user}")
 
     channel = bot.get_channel(CHANNEL_ID)
 
     if not channel:
-
         add_log("チャンネル取得失敗")
-
         await send_logs()
         await bot.close()
         return
 
     add_log("既存メッセージ削除")
-
     await purge_channel(channel)
 
     tournaments = await get_tournaments()
 
-    today_text = (
-        datetime.utcnow() + timedelta(hours=9)
-    ).strftime("%Y/%m/%d")
+    today_text = (datetime.utcnow() + timedelta(hours=9)).strftime("%Y/%m/%d")
 
     if not tournaments:
-
         add_log("本日の大会なし")
 
         await channel.send(
-            f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}\n"
+            f"## Shadowverse: Worlds Beyond Tonamel 大会一覧 {today_text}\n"
             f"> 本日の大会はありません。"
         )
 
         await send_logs()
-
         await bot.close()
         return
 
     await channel.send(
-        f"## Shadowverse: World Beyond Tonamel 大会一覧 {today_text}"
+        f"## Shadowverse: Worlds Beyond Tonamel 大会一覧 {today_text}"
     )
 
     for t in tournaments:
-
         embed = discord.Embed(
             title=t["title"],
             url=t["link"],
@@ -355,7 +223,6 @@ async def on_ready():
     add_log("大会送信完了")
 
     await send_logs()
-
     await bot.close()
 
 
