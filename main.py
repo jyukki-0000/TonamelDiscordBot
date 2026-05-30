@@ -6,6 +6,7 @@ import pytz
 
 from discord.ext import commands
 from datetime import datetime
+from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -28,7 +29,7 @@ def add_log(message):
     logs.append(message)
 
 
-def get_today_jst() -> datetime.date:
+def get_today_jst():
     """日本時間（JST）での今日の日付を返す"""
     return datetime.now(JST).date()
 
@@ -39,152 +40,100 @@ async def send_logs():
         return
 
     text = "\n".join(logs)
-    if len(text) > 1900:
-        text = text[-1900:]
-
-    await channel.send(f"```{text}```")
-
-
-async def fetch_page_with_retry(context, url, retries=3):
-    """
-    ページ取得をリトライ付きで行う。
-    成功時は (text, html) を返す。失敗時は (None, None) を返す。
-    """
-    for attempt in range(1, retries + 1):
-        page = await context.new_page()
-        try:
-            # domcontentloaded で待機（networkidle はSPAで詰まりやすいため変更）
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(3000)
-
-            text = await page.locator("body").inner_text()
-            html = await page.content()
-            await page.close()
-            return text, html
-
-        except Exception as e:
-            await page.close()
-            add_log(f"取得失敗 (試行 {attempt}/{retries}): {e}")
-            if attempt < retries:
-                await asyncio.sleep(3)
-
-    return None, None
+    # 1900文字超えたら複数に分割して送信
+    while text:
+        await channel.send(f"```{text[:1900]}```")
+        text = text[1900:]
 
 
 async def get_tournaments(today):
     """
-    today: date オブジェクト（JST）
-    当日大会リストを返す。
+    大会一覧ページのHTMLから直接、当日開催の大会を取得する。
+    各大会ページへの個別アクセスは不要。
     """
     tournaments = []
 
-    # ---- 大会一覧ページの取得 ----
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         page = await browser.new_page()
+
         add_log("Tonamelアクセス")
 
-        await page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+        # networkidle で待機（SPAのレンダリング完了を待つ）
+        try:
+            await page.goto(URL, wait_until="networkidle", timeout=90000)
+        except Exception:
+            # タイムアウトしても取得を試みる
+            add_log("networkidle タイムアウト、取得を続行")
+
         await page.wait_for_timeout(3000)
 
         html = await page.content()
-        add_log(f"HTML取得: {len(html)}文字")
         await browser.close()
 
-    matches = re.findall(r'/competition/([A-Za-z0-9]+)', html)
-    unique_ids = []
-    for m in matches:
-        if m != "index" and m not in unique_ids:
-            unique_ids.append(m)
+    add_log(f"HTML取得: {len(html)}文字")
 
-    add_log(f"検出大会数: {len(unique_ids)}")
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 大会カード: <li class="list-item"> の中に <a href="/competition/ID"> がある
+    items = soup.select("li.list-item")
+    add_log(f"検出大会数: {len(items)}")
+
+    if not items:
+        add_log("大会リストが取得できませんでした（レンダリング未完了の可能性あり）")
+        return tournaments
 
     weekdays = ["月", "火", "水", "木", "金", "土", "日"]
 
-    date_patterns = [
-        r'(20\d{2}/\d{1,2}/\d{1,2}).{0,50}?(\d{1,2}:\d{2})',
-        r'(20\d{2}-\d{1,2}-\d{1,2}).{0,50}?(\d{1,2}:\d{2})',
-    ]
+    for item in items:
+        try:
+            # ID・リンク取得
+            a_tag = item.select_one('a[href^="/competition/"]')
+            if not a_tag:
+                continue
+            href = a_tag["href"]  # 例: /competition/ft50T
+            competition_id = href.split("/")[-1]
+            link = f"https://tonamel.com{href}"
 
-    # ---- 各大会ページの確認 ----
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-        context = await browser.new_context()
+            # タイトル取得: class に "title" を含む span
+            title_tag = item.select_one("span.title")
+            title = title_tag.get_text(strip=True) if title_tag else "Tonamel大会"
 
-        for competition_id in unique_ids[:20]:
-            try:
-                link = f"https://tonamel.com/competition/{competition_id}"
-                add_log(f"確認中: {competition_id}")
+            # 日付取得: "2026/05/30(土)" 形式のテキストを持つ span を探す
+            date_text = None
+            for span in item.select("span"):
+                text = span.get_text(strip=True)
+                m = re.match(r"(20\d{2}/\d{1,2}/\d{1,2})", text)
+                if m:
+                    date_text = m.group(1)
+                    break
 
-                text, html = await fetch_page_with_retry(context, link, retries=3)
+            if not date_text:
+                add_log(f"日付取得失敗: {competition_id} ({title})")
+                continue
 
-                if text is None:
-                    # リトライ全滅 → この大会はスキップして次へ（中断しない）
-                    add_log(f"取得失敗のためスキップ: {competition_id}")
-                    continue
+            add_log(f"確認中: {competition_id} / {date_text} / {title}")
 
-                # タイトル取得
-                title = "Tonamel大会"
-                title_match = re.search(r"<title>(.*?)</title>", html, re.DOTALL)
-                if title_match:
-                    title = title_match.group(1).replace("| Tonamel", "").strip()
+            dt_date = datetime.strptime(date_text, "%Y/%m/%d").date()
 
-                # 日時取得（テキスト → HTML の順）
-                date_match = None
-                for pattern in date_patterns:
-                    date_match = re.search(pattern, text, re.DOTALL)
-                    if date_match:
-                        break
-                if not date_match:
-                    for pattern in date_patterns:
-                        date_match = re.search(pattern, html, re.DOTALL)
-                        if date_match:
-                            break
+            if dt_date != today:
+                add_log(f"当日大会ではない ({date_text})")
+                continue
 
-                if not date_match:
-                    add_log(f"日時取得失敗: {competition_id}")
-                    continue
+            # 時刻は一覧ページに含まれないため、開催時刻は「-」で表示
+            weekday = weekdays[dt_date.weekday()]
+            tournaments.append({
+                "title": title,
+                "link": link,
+                "schedule": dt_date.strftime(f"%Y/%m/%d({weekday})")
+            })
+            add_log(f"取得成功: {title}")
 
-                date_text = date_match.group(1).replace("-", "/")
-                time_text = date_match.group(2)
-
-                add_log(f"取得日付文字列: {date_text}")
-                add_log(f"取得時刻文字列: {time_text}")
-
-                dt = datetime.strptime(f"{date_text} {time_text}", "%Y/%m/%d %H:%M")
-                add_log(f"取得日時: {dt.strftime('%Y/%m/%d %H:%M')}")
-
-                competition_date = dt.date()
-
-                if competition_date < today:
-                    add_log("過去の大会のためスキップ")
-                    continue
-
-                if competition_date == today:
-                    weekday = weekdays[dt.weekday()]
-                    tournaments.append({
-                        "title": title,
-                        "link": link,
-                        "schedule": dt.strftime(f"%Y/%m/%d({weekday}) %H:%M ～")
-                    })
-                    add_log(f"取得成功: {title}")
-                    continue
-
-                # competition_date > today（未来）
-                # タイムアウト等で当日大会を取りこぼしている可能性があるため
-                # 未来大会が出ても即中断せず、全件スキャンする
-                add_log("当日大会ではない")
-
-            except Exception as e:
-                add_log(f"大会取得失敗 {competition_id}: {e}")
-
-        await browser.close()
+        except Exception as e:
+            add_log(f"パース失敗: {e}")
 
     add_log(f"最終取得数: {len(tournaments)}")
     return tournaments
@@ -211,7 +160,6 @@ async def on_ready():
         await bot.close()
         return
 
-    # JST で今日の日付を確定（以降すべてこの値を使う）
     today = get_today_jst()
     today_text = today.strftime("%Y/%m/%d")
     add_log(f"実行日（JST）: {today_text}")
@@ -223,12 +171,10 @@ async def on_ready():
 
     if not tournaments:
         add_log("本日の大会なし")
-
         await channel.send(
             f"## Shadowverse: Worlds Beyond Tonamel 大会一覧 {today_text}\n"
             f"> 本日の大会はありません。"
         )
-
         await send_logs()
         await bot.close()
         return
@@ -243,19 +189,15 @@ async def on_ready():
             url=t["link"],
             color=0xee4235
         )
-
         embed.add_field(
-            name="開催時間",
+            name="開催日",
             value=t["schedule"],
             inline=False
         )
-
         embed.set_footer(text="ShadowverseWB情報収集")
-
         await channel.send(embed=embed)
 
     add_log("大会送信完了")
-
     await send_logs()
     await bot.close()
 
