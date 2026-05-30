@@ -1,10 +1,11 @@
 name: Tonamel Tournament Bot
+# dummy commit
 
 on:
   schedule:
     # 日本時間 6:00 = UTC 21:00 (前日)
     # - cron: '0 21 * * *'
-    - cron: '35 3 * * *'  # JST 12:35
+    - cron: '30 4 * * *'  # JST 13:30
 
   workflow_dispatch:
 
